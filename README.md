@@ -83,15 +83,17 @@ keymolt approve openai-to-railway.example.json
 It prints where the recipe creates, verifies, stores and revokes keys. Read the
 list. If it is correct, confirm, and the exact file is trusted from now on.
 
-**3. Rotate.**
+**3. Create the first key, then rotate it later.**
 
 ```
+keymolt create openai-to-railway.example.json
 keymolt rotate openai-to-railway.example.json
 ```
 
-This is the only step an agent needs to run. The first run on a new recipe has
-no old key to delete, so it simply creates a key and places it. Later runs
-rotate.
+These are the only steps an agent needs to run. `create` makes a key and stores
+it, and refuses if keymolt already made a key for this recipe. `rotate` makes a
+new key, stores it, and deletes the old one. On a recipe with no key yet,
+`rotate` does the same as `create`.
 
 ## Writing a recipe
 

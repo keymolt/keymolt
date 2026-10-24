@@ -288,6 +288,23 @@ func TestRotate(t *testing.T) {
 		}
 	})
 
+	t.Run("create makes the first key and refuses when one is tracked", func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "new.json") // its own folder, so state starts fresh
+		writeJSON(t, p, maps(recipe, "name", "fake_create"))
+		code, out, _ := cli(t, "SECRET", "create", p)
+		if code != 0 || out["ok"] != true || len(list(out["revoked"])) != 0 {
+			t.Fatal("create on a new recipe:", out)
+		}
+		created := f.n
+		code, out, _ = cli(t, "SECRET", "create", p)
+		if code != 1 || !strings.Contains(str(out["error"]), "already made a key") || f.n != created {
+			t.Fatal("a second create must stop before making a key:", out)
+		}
+		if code, out, _ = cli(t, "SECRET", "rotate", p); code != 0 || len(list(out["revoked"])) != 1 {
+			t.Fatal("rotate after create:", out)
+		}
+	})
+
 	t.Run("folder lock", func(t *testing.T) {
 		dir := t.TempDir()
 		p := filepath.Join(dir, "locked.json")

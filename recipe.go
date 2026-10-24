@@ -260,7 +260,11 @@ type stateEntry struct {
 	Stale []string `json:"stale"`
 }
 
-func rotate(recipePath string) (*receipt, error) {
+func rotate(recipePath string) (*receipt, error) { return runRecipe(recipePath, false) }
+
+// runRecipe makes a new key and stores it, then revokes the old one. createOnly refuses to run when the
+// folder's state already records a key for this recipe. It can't see keys set by hand or tracked in another folder.
+func runRecipe(recipePath string, createOnly bool) (*receipt, error) {
 	recipe, err := readJSONFile(recipePath)
 	if err != nil {
 		return nil, err
@@ -302,6 +306,9 @@ func rotate(recipePath string) (*receipt, error) {
 		return os.Rename(tmp, statePath) // atomic: a crash can't leave a half-written state file
 	}
 	entry := state[stateKey]
+	if createOnly && (entry.ID != "" || len(entry.Stale) > 0) {
+		return nil, fmt.Errorf("keymolt already made a key for this recipe; run `keymolt rotate %s` to replace it", recipePath)
+	}
 	ctx := map[string]string{"ts": time.Now().Format("20060102-150405"), "old_id": entry.ID}
 
 	create := asMap(recipe["create"])
@@ -323,7 +330,7 @@ func rotate(recipePath string) (*receipt, error) {
 	out := &receipt{Name: name, NewID: ctx["new_id"], Length: len(ctx["new"]), SHA256: hex.EncodeToString(sum[:])[:12],
 		Stored: []string{}, Revoked: []string{}, RevokeFailed: []string{}}
 	if entry.ID == "" && recipe["revoke"] != nil { // keymolt only revokes keys it created
-		out.RevokeByHand = "the key that was in use before keymolt's first rotation"
+		out.RevokeByHand = "if a key was in use before keymolt's first run, revoke it by hand"
 	}
 
 	revoke := func(id string) bool {

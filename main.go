@@ -15,6 +15,7 @@ const usage = `keymolt: create, store, verify and revoke API keys without printi
 
   keymolt cred-set NAME HOST [HOST ...]              human, once: hidden prompt, saves a credential locked to these hosts
   keymolt approve RECIPE                             human, once: shows where a recipe sends keys, then trusts it
+  keymolt create RECIPE                              first key: new key -> verify -> store. Refuses if keymolt already made one.
   keymolt rotate RECIPE                              new key -> verify -> store -> revoke old. Prints metadata only.
   keymolt rotate-all FOLDER                          rotate every recipe in FOLDER, append receipts to FOLDER/keymolt.log
   keymolt schedule FOLDER weekly|monthly             run rotate-all on a schedule (Task Scheduler, launchd or systemd)
@@ -50,9 +51,9 @@ func run(args []string, w io.Writer) (code int) {
 		err = credSetPrompt(args[1], args[2:], w)
 	case len(args) == 2 && args[0] == "approve":
 		err = approveCommand(args[1], w)
-	case len(args) == 2 && args[0] == "rotate":
+	case len(args) == 2 && (args[0] == "create" || args[0] == "rotate"):
 		var r *receipt
-		if r, err = rotate(args[1]); err == nil {
+		if r, err = runRecipe(args[1], args[0] == "create"); err == nil {
 			printJSON(w, r)
 		}
 	case len(args) == 2 && args[0] == "rotate-all":
