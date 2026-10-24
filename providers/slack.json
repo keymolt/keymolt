@@ -1,0 +1,3 @@
+{
+  "detect": {"name": "SLACK", "value": "^xox[abprs]-"}
+}

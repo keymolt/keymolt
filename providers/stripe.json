@@ -1,0 +1,3 @@
+{
+  "detect": {"name": "STRIPE", "value": "^[sr]k_(live|test)_"}
+}

@@ -1,0 +1,16 @@
+{
+  "name": "acme_prod",
+  "create": {
+    "browser": "acme-create.flow.json",
+    "vars": {"name": "keymolt-{{ts}}"},
+    "value": "value",
+    "id": "id"
+  },
+  "store": [
+    {"label": "convex", "cmd": ["npx", "convex", "env", "set", "ACME_API_KEY", "--prod", "--force"]}
+  ],
+  "revoke": {
+    "browser": "acme-revoke.flow.json",
+    "vars": {"old_id": "{{old_id}}"}
+  }
+}

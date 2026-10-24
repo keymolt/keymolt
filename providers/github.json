@@ -1,0 +1,3 @@
+{
+  "detect": {"name": "GITHUB|^GH_", "value": "^(ghp_|gho_|ghs_|github_pat_)"}
+}

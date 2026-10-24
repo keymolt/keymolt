@@ -1,0 +1,3 @@
+{
+  "detect": {"name": "ANTHROPIC|CLAUDE", "value": "^sk-ant-"}
+}

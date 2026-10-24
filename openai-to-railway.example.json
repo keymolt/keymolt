@@ -1,0 +1,33 @@
+{
+  "name": "openai_prod",
+  "create": {
+    "method": "POST",
+    "url": "https://api.openai.com/v1/organization/projects/PROJECT_ID/service_accounts",
+    "headers": {"Authorization": "Bearer {{cred:openai_admin}}", "Content-Type": "application/json"},
+    "body": {"name": "keymolt-{{ts}}"},
+    "value": "api_key.value",
+    "id": "id"
+  },
+  "verify": {
+    "url": "https://api.openai.com/v1/models",
+    "headers": {"Authorization": "Bearer {{new}}"}
+  },
+  "store": [
+    {
+      "label": "railway",
+      "method": "POST",
+      "url": "https://backboard.railway.com/graphql/v2",
+      "headers": {"Authorization": "Bearer {{cred:railway}}", "Content-Type": "application/json"},
+      "body": {
+        "query": "mutation($i: VariableUpsertInput!) { variableUpsert(input: $i) }",
+        "variables": {"i": {"projectId": "RAILWAY_PROJECT_ID", "environmentId": "RAILWAY_ENV_ID", "serviceId": "RAILWAY_SERVICE_ID", "name": "OPENAI_API_KEY", "value": "{{new}}"}}
+      },
+      "ok_path": "data.variableUpsert"
+    }
+  ],
+  "revoke": {
+    "method": "DELETE",
+    "url": "https://api.openai.com/v1/organization/projects/PROJECT_ID/service_accounts/{{old_id}}",
+    "headers": {"Authorization": "Bearer {{cred:openai_admin}}"}
+  }
+}

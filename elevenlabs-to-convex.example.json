@@ -1,0 +1,27 @@
+{
+  "name": "elevenlabs_prod",
+  "create": {
+    "method": "POST",
+    "url": "https://api.elevenlabs.io/v1/service-accounts/SERVICE_ACCOUNT_USER_ID/api-keys",
+    "headers": {"xi-api-key": "{{cred:elevenlabs_admin}}", "Content-Type": "application/json"},
+    "body": {"name": "keymolt-{{ts}}", "permissions": ["text_to_speech"]},
+    "value": "xi-api-key",
+    "id": "key_id"
+  },
+  "verify": {
+    "url": "https://api.elevenlabs.io/v1/user",
+    "headers": {"xi-api-key": "{{new}}"}
+  },
+  "store": [
+    {
+      "label": "convex",
+      "cmd": ["npx", "convex", "env", "set", "ELEVENLABS_API_KEY", "--prod", "--force"]
+    }
+  ],
+  "revoke": {
+    "method": "PATCH",
+    "url": "https://api.elevenlabs.io/v1/service-accounts/SERVICE_ACCOUNT_USER_ID/api-keys/{{old_id}}",
+    "headers": {"xi-api-key": "{{cred:elevenlabs_admin}}", "Content-Type": "application/json"},
+    "body": {"is_enabled": false}
+  }
+}

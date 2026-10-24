@@ -1,0 +1,7 @@
+{
+  "profile": "acme",
+  "steps": [
+    {"goto": "https://dashboard.acme.com/settings/api-keys"},
+    {"click": "//tr[contains(., '{{old_id}}')]//button[contains(., 'Delete')]"}
+  ]
+}

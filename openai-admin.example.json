@@ -1,0 +1,21 @@
+{
+  "name": "openai_admin",
+  "create": {
+    "method": "POST",
+    "url": "https://api.openai.com/v1/organization/admin_api_keys",
+    "headers": {"Authorization": "Bearer {{cred:openai_admin}}", "Content-Type": "application/json"},
+    "body": {"name": "keymolt-admin-{{ts}}"},
+    "value": "value",
+    "id": "id"
+  },
+  "verify": {
+    "url": "https://api.openai.com/v1/organization/admin_api_keys?limit=1",
+    "headers": {"Authorization": "Bearer {{new}}"}
+  },
+  "store": [{"label": "vault", "vault": "openai_admin"}],
+  "revoke": {
+    "method": "DELETE",
+    "url": "https://api.openai.com/v1/organization/admin_api_keys/{{old_id}}",
+    "headers": {"Authorization": "Bearer {{cred:openai_admin}}"}
+  }
+}

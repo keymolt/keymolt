@@ -1,0 +1,15 @@
+{
+  "name": "aws_deploy_user",
+  "create": {
+    "cmd": ["aws", "iam", "create-access-key", "--user-name", "IAM_USER", "--output", "json"],
+    "value": "AccessKey.SecretAccessKey",
+    "id": "AccessKey.AccessKeyId"
+  },
+  "store": [
+    {"label": "gh-secret-key", "cmd": ["gh", "secret", "set", "AWS_SECRET_ACCESS_KEY", "--repo", "OWNER/REPO"]},
+    {"label": "gh-key-id", "cmd": ["gh", "secret", "set", "AWS_ACCESS_KEY_ID", "--repo", "OWNER/REPO", "--body", "{{new_id}}"]}
+  ],
+  "revoke": {
+    "cmd": ["aws", "iam", "delete-access-key", "--user-name", "IAM_USER", "--access-key-id", "{{old_id}}"]
+  }
+}

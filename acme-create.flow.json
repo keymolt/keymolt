@@ -1,0 +1,12 @@
+{
+  "profile": "acme",
+  "id": "{{name}}",
+  "timeout": 20,
+  "steps": [
+    {"goto": "https://dashboard.acme.com/settings/api-keys"},
+    {"click": "#new-api-key"},
+    {"fill": "#key-name", "value": "{{name}}"},
+    {"capture": "sk-[A-Za-z0-9]{32,}"},
+    {"click": "#create"}
+  ]
+}
