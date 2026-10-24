@@ -26,7 +26,8 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
-// TestHelperProcess stands in for CLI tools in recipes: "store" saves stdin to a file, "gen" prints a new secret.
+// TestHelperProcess stands in for CLI tools in recipes: "store" saves stdin to a file, "print" prints a file,
+// "gen" prints a new secret.
 func TestHelperProcess(t *testing.T) {
 	if os.Getenv("KEYMOLT_HELPER") != "1" {
 		return
@@ -36,6 +37,9 @@ func TestHelperProcess(t *testing.T) {
 	case "store":
 		b, _ := io.ReadAll(os.Stdin)
 		_ = os.WriteFile(args[1], b, 0o600)
+	case "print": // stands in for a CLI that prints the key a destination holds, like `convex env get`
+		b, _ := os.ReadFile(args[1])
+		os.Stdout.Write(b)
 	case "gen":
 		b := make([]byte, 16)
 		_, _ = rand.Read(b)

@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"sort"
 	"strconv"
@@ -49,6 +50,15 @@ func recipeDestinations(recipe map[string]any) []string {
 			out = append(out, label+" -> browser flow "+str(step["browser"]))
 		case step["vault"] != nil:
 			out = append(out, label+" -> keymolt vault ("+str(step["vault"])+")")
+		}
+	}
+	if c := asMap(recipe["current"]); c != nil {
+		add("current", c)
+	}
+	if f := asMap(recipe["find"]); f != nil {
+		add("find", f)
+		if r := asMap(f["revoke"]); r != nil {
+			add("find revoke", r)
 		}
 	}
 	add("create", asMap(recipe["create"]))
@@ -188,6 +198,9 @@ func call(step map[string]any, ctx map[string]string, dir string) (ok bool, data
 		return false, nil, "", errors.New("step has no url, cmd, browser or vault")
 	}
 	data = decode(raw)
+	if s := strings.TrimSpace(string(raw)); data == nil && s != "" { // plain text, such as a CLI printing a key
+		data = s
+	}
 	if ok && step["ok_path"] != nil { // GraphQL APIs return 200 even when the mutation failed
 		v, err := pick(data, str(step["ok_path"]))
 		ok = err == nil && truthy(v)
@@ -253,11 +266,13 @@ type receipt struct {
 	RevokeFailed []string `json:"revoke_failed"`
 	Verify       string   `json:"verify,omitempty"`
 	RevokeByHand string   `json:"revoke_by_hand,omitempty"`
+	Found        string   `json:"found,omitempty"`
 }
 
 type stateEntry struct {
 	ID    string   `json:"id"`
 	Stale []string `json:"stale"`
+	Found []string `json:"found,omitempty"` // stale keys located by the "find" step, revoked with find's own revoke
 }
 
 func rotate(recipePath string) (*receipt, error) { return runRecipe(recipePath, false) }
@@ -278,6 +293,9 @@ func runRecipe(recipePath string, createOnly bool) (*receipt, error) {
 	}
 	if len(asList(recipe["store"])) == 0 { // without this, a store typo would delete the old key and store nothing
 		return nil, errors.New("recipe has no store step; the new key would have nowhere to go")
+	}
+	if f := asMap(recipe["find"]); f != nil && (asMap(recipe["current"]) == nil || str(f["id"]) == "" || str(f["hint"]) == "") {
+		return nil, errors.New(`a "find" step needs a "current" step and "id" and "hint" paths`)
 	}
 	if !isApproved(recipePath) {
 		return nil, fmt.Errorf("recipe not approved: run `keymolt approve %s` in a terminal first", recipePath)
@@ -309,7 +327,38 @@ func runRecipe(recipePath string, createOnly bool) (*receipt, error) {
 	if createOnly && (entry.ID != "" || len(entry.Stale) > 0) {
 		return nil, fmt.Errorf("keymolt already made a key for this recipe; run `keymolt rotate %s` to replace it", recipePath)
 	}
-	ctx := map[string]string{"ts": time.Now().Format("20060102-150405"), "old_id": entry.ID}
+	prevID, found := entry.ID, slices.Clone(entry.Found)
+	unknownOld := entry.ID == "" && len(entry.Stale) == 0 // nothing tracked: a key set by hand may be in use
+	if unknownOld && recipe["current"] != nil {
+		value, read, err := currentKey(asMap(recipe["current"]), dir)
+		if err != nil {
+			return nil, err
+		}
+		switch {
+		case read && value == "":
+			unknownOld = false // the destination holds no key yet
+		case read && createOnly:
+			return nil, fmt.Errorf("the destination already holds a key; run `keymolt rotate %s` to replace it", recipePath)
+		case read:
+			if prevID, err = findKeyID(asMap(recipe["find"]), value, dir); err != nil {
+				return nil, err
+			}
+			if prevID != "" {
+				found, unknownOld = append(found, prevID), false
+			}
+		}
+	}
+	ctx := map[string]string{"ts": time.Now().Format("20060102-150405"), "old_id": prevID}
+	// track records the new key and the old keys still live, remembering which of them "find" located
+	track := func(stale []string) stateEntry {
+		var f []string
+		for _, id := range found {
+			if slices.Contains(stale, id) {
+				f = append(f, id)
+			}
+		}
+		return stateEntry{ctx["new_id"], stale, f}
+	}
 
 	create := asMap(recipe["create"])
 	ok, resp, detail, err := call(create, ctx, dir)
@@ -329,12 +378,19 @@ func runRecipe(recipePath string, createOnly bool) (*receipt, error) {
 	sum := sha256.Sum256([]byte(ctx["new"]))
 	out := &receipt{Name: name, NewID: ctx["new_id"], Length: len(ctx["new"]), SHA256: hex.EncodeToString(sum[:])[:12],
 		Stored: []string{}, Revoked: []string{}, RevokeFailed: []string{}}
-	if entry.ID == "" && recipe["revoke"] != nil { // keymolt only revokes keys it created
+	if prevID != "" && prevID != entry.ID {
+		out.Found = prevID
+	}
+	if unknownOld && recipe["revoke"] != nil { // keymolt only revokes keys it created or found
 		out.RevokeByHand = "if a key was in use before keymolt's first run, revoke it by hand"
 	}
 
 	revoke := func(id string) bool {
-		if id == "" || recipe["revoke"] == nil { // locally generated secrets die when overwritten
+		step := asMap(recipe["revoke"])
+		if r := asMap(asMap(recipe["find"])["revoke"]); r != nil && slices.Contains(found, id) {
+			step = r // a key made by hand can be a different kind, with its own delete endpoint
+		}
+		if id == "" || step == nil { // locally generated secrets die when overwritten
 			return id == ""
 		}
 		c := map[string]string{}
@@ -342,7 +398,7 @@ func runRecipe(recipePath string, createOnly bool) (*receipt, error) {
 			c[k] = v
 		}
 		c["old_id"] = id
-		ok, _, _, err := call(asMap(recipe["revoke"]), c, dir)
+		ok, _, _, err := call(step, c, dir)
 		if ok && err == nil {
 			out.Revoked = append(out.Revoked, id)
 		}
@@ -372,8 +428,8 @@ func runRecipe(recipePath string, createOnly bool) (*receipt, error) {
 
 	// every old key that is still live, before we delete any of them
 	oldLive := slices.Clone(entry.Stale)
-	if entry.ID != "" {
-		oldLive = append(oldLive, entry.ID)
+	if prevID != "" {
+		oldLive = append(oldLive, prevID)
 	}
 
 	for i, d := range asList(recipe["store"]) {
@@ -388,7 +444,7 @@ func runRecipe(recipePath string, createOnly bool) (*receipt, error) {
 				return nil, fmt.Errorf("store #%d failed (%s); new key revoked, old key untouched", i, detail)
 			}
 			// some destinations now hold the new key: keep every key live, revoke the old ones next run
-			state[stateKey] = stateEntry{ctx["new_id"], oldLive}
+			state[stateKey] = track(oldLive)
 			if e := saveState(); e != nil {
 				return nil, fmt.Errorf("store #%d failed and state save failed (%v); keys may be untracked, check the provider", i, e)
 			}
@@ -402,15 +458,15 @@ func runRecipe(recipePath string, createOnly bool) (*receipt, error) {
 	}
 
 	// record the new key and every old key as live BEFORE deleting any, so a crash or a bad write never loses track
-	state[stateKey] = stateEntry{ctx["new_id"], oldLive}
+	state[stateKey] = track(oldLive)
 	if err := saveState(); err != nil {
 		return nil, fmt.Errorf("new key stored but state save failed (%v); old keys left live, fix the folder and rerun", err)
 	}
 
 	// keep_previous: apps that read keys only at deploy time need the old key until they redeploy
 	keep := ""
-	if entry.ID != "" && truthy(recipe["keep_previous"]) {
-		keep = entry.ID
+	if prevID != "" && truthy(recipe["keep_previous"]) {
+		keep = prevID
 	}
 	stale := []string{}
 	for _, k := range oldLive {
@@ -421,10 +477,82 @@ func runRecipe(recipePath string, createOnly bool) (*receipt, error) {
 	if keep != "" {
 		stale = append(stale, keep)
 	}
-	state[stateKey] = stateEntry{ctx["new_id"], stale}
+	state[stateKey] = track(stale)
 	_ = saveState() // best effort: worst case is a later run retries a delete that already happened
 	out.OK, out.RevokeFailed = true, stale
 	return out, nil
+}
+
+// currentKey reads the key in use now from the destination, with the recipe's "current" step. read is false
+// when the answer is unknown, such as a failed step.
+func currentKey(step map[string]any, dir string) (value string, read bool, err error) {
+	ok, data, _, err := call(step, map[string]string{}, dir)
+	if err != nil || !ok {
+		return "", false, err
+	}
+	if p := str(step["value"]); p != "" {
+		if data, err = pick(data, p); err != nil {
+			return "", false, nil
+		}
+	}
+	switch data.(type) {
+	case nil, string, json.Number:
+		value = str(data)
+	default:
+		return "", false, nil // an object where a key should be
+	}
+	addSecret(value)
+	return value, true, nil
+}
+
+// findKeyID asks the provider for its keys with the recipe's "find" step and returns the id of the one whose
+// masked form, such as "sk-ab...xY7q", fits value. It returns "" unless exactly one key fits: a guess could
+// revoke a key that is in use.
+func findKeyID(step map[string]any, value, dir string) (string, error) {
+	if step == nil {
+		return "", nil
+	}
+	req := map[string]any{}
+	for k, v := range step {
+		if k != "revoke" { // find's own revoke step runs later, with an id
+			req[k] = v
+		}
+	}
+	ok, data, _, err := call(req, map[string]string{}, dir)
+	if err != nil || !ok {
+		return "", err
+	}
+	list := data
+	if p := str(step["list"]); p != "" {
+		if list, err = pick(data, p); err != nil {
+			return "", nil
+		}
+	}
+	var ids []string
+	for _, item := range asList(list) {
+		hint, _ := pick(item, str(step["hint"]))
+		id, _ := pick(item, str(step["id"]))
+		if str(id) != "" && matchesHint(value, str(hint)) {
+			ids = append(ids, str(id))
+		}
+	}
+	if len(ids) != 1 {
+		return "", nil
+	}
+	return ids[0], nil
+}
+
+var maskRun = regexp.MustCompile(`\.{3}|…|\*+`)
+
+// matchesHint reports whether key fits a masked hint such as "sk-ab...xY7q" or "****xY7q". It needs at least 4
+// visible characters, so a hint that hides everything can't match every key.
+func matchesHint(key, hint string) bool {
+	parts := maskRun.Split(hint, 2)
+	if len(parts) == 1 {
+		return hint != "" && hint == key
+	}
+	pre, suf := parts[0], parts[1]
+	return len(pre)+len(suf) >= 4 && len(key) >= len(pre)+len(suf) && strings.HasPrefix(key, pre) && strings.HasSuffix(key, suf)
 }
 
 // lockDir stops two keymolt runs in one folder from overwriting each other's state file.

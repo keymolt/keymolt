@@ -1,0 +1,38 @@
+{
+  "name": "openai_convex_prod",
+  "current": {
+    "cmd": ["npx", "convex", "env", "get", "OPENAI_API_KEY", "--deployment", "TEAM:PROJECT:prod"]
+  },
+  "find": {
+    "url": "https://api.openai.com/v1/organization/projects/PROJECT_ID/api_keys?limit=100&owner_project_access=any",
+    "headers": {"Authorization": "Bearer {{cred:openai_admin}}"},
+    "list": "data",
+    "id": "id",
+    "hint": "redacted_value",
+    "revoke": {
+      "method": "DELETE",
+      "url": "https://api.openai.com/v1/organization/projects/PROJECT_ID/api_keys/{{old_id}}",
+      "headers": {"Authorization": "Bearer {{cred:openai_admin}}"}
+    }
+  },
+  "create": {
+    "method": "POST",
+    "url": "https://api.openai.com/v1/organization/projects/PROJECT_ID/service_accounts",
+    "headers": {"Authorization": "Bearer {{cred:openai_admin}}", "Content-Type": "application/json"},
+    "body": {"name": "keymolt-{{ts}}"},
+    "value": "api_key.value",
+    "id": "id"
+  },
+  "verify": {
+    "url": "https://api.openai.com/v1/models",
+    "headers": {"Authorization": "Bearer {{new}}"}
+  },
+  "store": [
+    {"label": "convex prod", "cmd": ["npx", "convex", "env", "set", "OPENAI_API_KEY", "--deployment", "TEAM:PROJECT:prod"]}
+  ],
+  "revoke": {
+    "method": "DELETE",
+    "url": "https://api.openai.com/v1/organization/projects/PROJECT_ID/service_accounts/{{old_id}}",
+    "headers": {"Authorization": "Bearer {{cred:openai_admin}}"}
+  }
+}
