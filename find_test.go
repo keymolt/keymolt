@@ -71,6 +71,13 @@ func (f *fakeKeyAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// setTerminal makes link and revoke see a person at a terminal (true) or an agent's shell (false).
+func setTerminal(t *testing.T, person bool) {
+	prev := atTerminal
+	atTerminal = func() bool { return person }
+	t.Cleanup(func() { atTerminal = prev })
+}
+
 func TestFindKeyMadeByHand(t *testing.T) {
 	f := &fakeKeyAPI{keys: map[string]string{"hand1": "sk-hand-SECRET-1234"}}
 	srv := httptest.NewServer(f)
@@ -111,6 +118,7 @@ func TestFindKeyMadeByHand(t *testing.T) {
 	})
 
 	t.Run("find, link, then rotate replaces the key and revokes it", func(t *testing.T) {
+		setTerminal(t, true)
 		_, p := setup("sk-hand-SECRET-1234")
 		if code, out, _ := cli(t, "SECRET", "find", p); code != 0 || out["id"] != "hand1" {
 			t.Fatal("find:", out)
@@ -130,6 +138,7 @@ func TestFindKeyMadeByHand(t *testing.T) {
 	})
 
 	t.Run("revoke deletes a key now, with the step that fits it", func(t *testing.T) {
+		setTerminal(t, true)
 		f.keys["hand4"] = "sk-left-SECRET-4444"
 		_, p := setup("")
 		if code, out, _ := cli(t, "SECRET", "revoke", p, "hand4"); code != 0 || !slices.Contains(f.deleted, "api_keys/hand4") {
@@ -149,6 +158,24 @@ func TestFindKeyMadeByHand(t *testing.T) {
 			if code, _, _ := cli(t, "SECRET", "revoke", p, bad); code != 1 {
 				t.Fatalf("id %q must be refused", bad)
 			}
+		}
+	})
+
+	t.Run("an agent can't link or revoke a key keymolt doesn't track, but can revoke its own", func(t *testing.T) {
+		setTerminal(t, false)
+		f.keys["hand5"] = "sk-side-SECRET-5555"
+		_, p := setup("")
+		before := len(f.deleted)
+		if code, _, _ := cli(t, "SECRET", "link", p, "hand5"); code != 1 {
+			t.Fatal("link must need a terminal")
+		}
+		if code, out, _ := cli(t, "SECRET", "revoke", p, "hand5"); code != 1 || len(f.deleted) != before {
+			t.Fatal("revoking an untracked key must need a terminal:", out, f.deleted)
+		}
+		_, out, _ := cli(t, "SECRET", "create", p)
+		own := str(out["new_id"])
+		if code, out, _ := cli(t, "SECRET", "revoke", p, own); code != 0 || !slices.Contains(f.deleted, "keys/"+own) {
+			t.Fatal("keymolt's own key can be revoked without a terminal:", out, f.deleted)
 		}
 	})
 

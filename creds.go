@@ -144,8 +144,12 @@ func isApproved(path string) bool {
 	return err == nil
 }
 
+// atTerminal reports whether a person is likely at the keyboard: an agent's shell has no terminal on stdin.
+// Tests replace it.
+var atTerminal = func() bool { return term.IsTerminal(int(os.Stdin.Fd())) }
+
 func approveCommand(path string, w io.Writer) error {
-	if !term.IsTerminal(int(os.Stdin.Fd())) {
+	if !atTerminal() {
 		return errors.New("run `keymolt approve` in a real terminal: it confirms you trust where this recipe sends keys")
 	}
 	recipe, err := readJSONFile(path)

@@ -283,7 +283,9 @@ keymolt revoke RECIPE ID     # revoke a key now, without making a new one
 ```
 
 Use `revoke` at once for a key that may be leaked. Use `link`, then `rotate`,
-once you know the recipe stores to every place that uses the key.
+once you know the recipe stores to every place that uses the key. `link`, and
+`revoke` for a key keymolt doesn't track, need a real terminal, like `approve`.
+Without that check, an agent could delete any key the provider account holds.
 
 `find` needs two optional recipe steps:
 

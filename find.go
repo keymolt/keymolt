@@ -52,6 +52,9 @@ func linkCommand(recipePath, id string) error {
 	if !keyID.MatchString(id) {
 		return fmt.Errorf("%q is not a key id", id)
 	}
+	if !atTerminal() { // a linked key gets deleted on the next rotate, so a person picks it
+		return fmt.Errorf("run `keymolt link %s %s` in a real terminal: it confirms nothing else uses this key", recipePath, id)
+	}
 	if _, err := readJSONFile(recipePath); err != nil {
 		return err
 	}
@@ -88,7 +91,11 @@ func revokeCommand(recipePath, id string) (note string, err error) {
 	}
 	defer fs.unlock()
 	e := fs.state[fs.key]
-	made := (id == e.ID || slices.Contains(e.Stale, id)) && !slices.Contains(e.Found, id)
+	tracked := id == e.ID || slices.Contains(e.Stale, id)
+	if !tracked && !atTerminal() { // otherwise an agent could delete any key the provider account holds
+		return "", fmt.Errorf("keymolt doesn't track key %s: run `keymolt revoke %s %s` in a real terminal", id, recipePath, id)
+	}
+	made := tracked && !slices.Contains(e.Found, id)
 	step := asMap(recipe["revoke"])
 	if r := asMap(asMap(recipe["find"])["revoke"]); r != nil && !made {
 		step = r

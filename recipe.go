@@ -312,7 +312,6 @@ func runRecipe(recipePath string, createOnly bool) (*receipt, error) {
 	if createOnly && (entry.ID != "" || len(entry.Stale) > 0) {
 		return nil, fmt.Errorf("keymolt already made a key for this recipe; run `keymolt rotate %s` to replace it", recipePath)
 	}
-	prevID, found := entry.ID, slices.Clone(entry.Found)
 	unknownOld := entry.ID == "" && len(entry.Stale) == 0 // nothing tracked: a key set by hand may be in use
 	before := ""                                          // the key a destination held that keymolt doesn't track: reported, never revoked
 	if unknownOld && recipe["current"] != nil {
@@ -331,11 +330,11 @@ func runRecipe(recipePath string, createOnly bool) (*receipt, error) {
 			}
 		}
 	}
-	ctx := map[string]string{"ts": time.Now().Format("20060102-150405"), "old_id": prevID}
-	// track records the new key and the old keys still live, remembering which of them "find" located
+	ctx := map[string]string{"ts": time.Now().Format("20060102-150405"), "old_id": entry.ID}
+	// track records the new key and the old keys still live, remembering which of them were linked
 	track := func(stale []string) stateEntry {
 		var f []string
-		for _, id := range found {
+		for _, id := range entry.Found {
 			if slices.Contains(stale, id) {
 				f = append(f, id)
 			}
@@ -363,7 +362,7 @@ func runRecipe(recipePath string, createOnly bool) (*receipt, error) {
 		Stored: []string{}, Revoked: []string{}, RevokeFailed: []string{}}
 	out.Found = before
 	if unknownOld && recipe["revoke"] != nil { // keymolt only revokes keys it created or was linked to
-		out.RevokeByHand = "if a key was in use before keymolt's first run, it is still live: revoke it by hand"
+		out.RevokeByHand = "if a key was in use before keymolt's first run, it may still be live: revoke it by hand"
 		if before != "" {
 			out.RevokeByHand = fmt.Sprintf("%s, the key in use before keymolt, is still live. Once nothing else uses it, "+
 				"or now if it may be leaked, run `keymolt revoke %s %s`", before, recipePath, before)
@@ -372,7 +371,7 @@ func runRecipe(recipePath string, createOnly bool) (*receipt, error) {
 
 	revoke := func(id string) bool {
 		step := asMap(recipe["revoke"])
-		if r := asMap(asMap(recipe["find"])["revoke"]); r != nil && slices.Contains(found, id) {
+		if r := asMap(asMap(recipe["find"])["revoke"]); r != nil && slices.Contains(entry.Found, id) {
 			step = r // a key made by hand can be a different kind, with its own delete endpoint
 		}
 		if id == "" || step == nil { // locally generated secrets die when overwritten
@@ -413,8 +412,8 @@ func runRecipe(recipePath string, createOnly bool) (*receipt, error) {
 
 	// every old key that is still live, before we delete any of them
 	oldLive := slices.Clone(entry.Stale)
-	if prevID != "" {
-		oldLive = append(oldLive, prevID)
+	if entry.ID != "" {
+		oldLive = append(oldLive, entry.ID)
 	}
 
 	for i, d := range asList(recipe["store"]) {
@@ -450,8 +449,8 @@ func runRecipe(recipePath string, createOnly bool) (*receipt, error) {
 
 	// keep_previous: apps that read keys only at deploy time need the old key until they redeploy
 	keep := ""
-	if prevID != "" && truthy(recipe["keep_previous"]) {
-		keep = prevID
+	if entry.ID != "" && truthy(recipe["keep_previous"]) {
+		keep = entry.ID
 	}
 	stale := []string{}
 	for _, k := range oldLive {

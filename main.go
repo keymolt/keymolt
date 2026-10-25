@@ -18,8 +18,8 @@ const usage = `keymolt: create, store, verify and revoke API keys without printi
   keymolt create RECIPE                              first key: new key -> verify -> store. Refuses if keymolt already made one.
   keymolt rotate RECIPE                              new key -> verify -> store -> revoke old. Prints metadata only.
   keymolt find RECIPE                                print the id of the key the recipe's destination holds now
-  keymolt link RECIPE ID                             track key ID, so the next rotate replaces it, then revokes it
-  keymolt revoke RECIPE ID                           revoke key ID now, without making a new one
+  keymolt link RECIPE ID                             human: track key ID, so the next rotate replaces it, then revokes it
+  keymolt revoke RECIPE ID                           revoke key ID now, without a new one. Human, for a key keymolt doesn't track.
   keymolt rotate-all FOLDER                          rotate every recipe in FOLDER, append receipts to FOLDER/keymolt.log
   keymolt schedule FOLDER weekly|monthly             run rotate-all on a schedule (Task Scheduler, launchd or systemd)
   keymolt rescue scan RAILWAY_PROJECT_ID             after a breach: list every key in a Railway project
