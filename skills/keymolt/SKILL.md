@@ -108,5 +108,5 @@ one JSON line. On success, `ok` is `true`. On failure, the output is
 | `keymolt already made a key for this recipe` | Use `rotate` instead of `create` |
 | `store #N failed ...` ending in `both live, rerun` | A destination may hold the new key, so both keys stay live. Fix the cause, then run `rotate` again. |
 | `new key ... could not be revoked` | keymolt still tracks it, and the next `rotate` revokes it |
-| `the last rotation's store failed, so key ... may be live and unused` | `rotate-all` stops for this recipe. Find out why the store failed, such as an expired login, and tell the user. After the fix, run `keymolt rotate RECIPE`. |
+| `the last two rotations' stores failed, so keys ... may be live and unused` | `rotate-all` stops for this recipe. Find out why the store failed, such as an expired login, and tell the user. After the fix, run `keymolt rotate RECIPE`. |
 | `another keymolt run is using this folder` | Wait for the other run. If none is running, tell the user the lock file's path. |

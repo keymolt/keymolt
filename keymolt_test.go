@@ -392,28 +392,49 @@ func TestRotate(t *testing.T) {
 		}
 	})
 
-	t.Run("a pending key stops scheduled runs until a person reruns rotate", func(t *testing.T) {
+	t.Run("scheduled runs retry a failed store once, then stop until a person reruns rotate", func(t *testing.T) {
 		dir := t.TempDir()
 		p := filepath.Join(dir, "pend.json")
 		writeJSON(t, p, maps(recipe, "name", "fake_pend"))
 		cli(t, "SECRET", "rotate", p)
 		writeJSON(t, p, maps(recipe, "name", "fake_pend", "store", []any{map[string]any{"label": "flaky", "cmd": helper("fail", "")}}))
-		cli(t, "SECRET", "rotate", p)
-		pending := readState(t, dir)["pend.json"].Pending
 		made := f.n
+		cli(t, "SECRET", "rotate-all", dir) // fails, one pending
+		cli(t, "SECRET", "rotate-all", dir) // the retry fails too, two pending
+		pending := readState(t, dir)["pend.json"].Pending
+		if f.n != made+2 || len(pending) != 2 {
+			t.Fatal("rotate-all must retry once after a failed store:", f.n-made, pending)
+		}
 		for range 2 { // like a weekly job that keeps failing
-			if code, _, _ := cli(t, "SECRET", "rotate-all", dir); code != 1 || f.n != made {
-				t.Fatal("rotate-all must make no new key while one is pending")
+			if code, _, _ := cli(t, "SECRET", "rotate-all", dir); code != 1 || f.n != made+2 {
+				t.Fatal("rotate-all must make no new key while two are pending")
 			}
 		}
 		log, _ := os.ReadFile(filepath.Join(dir, "keymolt.log"))
-		if pending == "" || !strings.Contains(string(log), "fix the store, then run") {
-			t.Fatal("the log must say what to do:", pending, string(log))
+		if !strings.Contains(string(log), "fix the store, then run") {
+			t.Fatal("the log must say what to do:", string(log))
 		}
 		writeJSON(t, p, maps(recipe, "name", "fake_pend"))
 		code, out, _ := cli(t, "SECRET", "rotate", p)
-		if code != 0 || !slices.Contains(list(out["revoked"]), pending) || readState(t, dir)["pend.json"].Pending != "" {
-			t.Fatal("a rotate after the fix must revoke the pending key and clear it:", out)
+		if code != 0 || !slices.Contains(list(out["revoked"]), pending[0]) || !slices.Contains(list(out["revoked"]), pending[1]) ||
+			len(readState(t, dir)["pend.json"].Pending) != 0 {
+			t.Fatal("a rotate after the fix must revoke the pending keys and clear them:", out)
+		}
+	})
+
+	t.Run("a brief outage heals on the next scheduled run", func(t *testing.T) {
+		dir := t.TempDir()
+		p := filepath.Join(dir, "blip.json")
+		writeJSON(t, p, maps(recipe, "name", "fake_blip"))
+		cli(t, "SECRET", "rotate", p)
+		writeJSON(t, p, maps(recipe, "name", "fake_blip", "store", []any{map[string]any{"label": "flaky", "cmd": helper("fail", "")}}))
+		cli(t, "SECRET", "rotate-all", dir)
+		pending := readState(t, dir)["blip.json"].Pending
+		writeJSON(t, p, maps(recipe, "name", "fake_blip")) // the outage is over
+		code, out, _ := cli(t, "SECRET", "rotate-all", dir)
+		log, _ := os.ReadFile(filepath.Join(dir, "keymolt.log"))
+		if code != 0 || len(pending) != 1 || !strings.Contains(string(log), `"revoked":["`+pending[0]) || len(readState(t, dir)["blip.json"].Pending) != 0 {
+			t.Fatal("the next scheduled run must retry, then revoke the unused key:", out, string(log))
 		}
 	})
 
@@ -425,7 +446,7 @@ func TestRotate(t *testing.T) {
 		writeJSON(t, p, maps(recipe, "name", "fake_pendrev", "store", []any{map[string]any{"label": "flaky", "cmd": helper("fail", "")}}))
 		cli(t, "SECRET", "rotate", p)
 		pending := readState(t, dir)["pendrev.json"].Pending
-		if code, out, _ := cli(t, "SECRET", "revoke", p, pending); code != 0 || readState(t, dir)["pendrev.json"].Pending != "" {
+		if code, out, _ := cli(t, "SECRET", "revoke", p, pending[0]); code != 0 || len(readState(t, dir)["pendrev.json"].Pending) != 0 {
 			t.Fatal("revoke must clear the pending key:", out)
 		}
 	})

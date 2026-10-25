@@ -41,10 +41,11 @@ The human keeps the power to see secrets and to decide where they may go.
   key, tests it, stores it everywhere the old one lived, saves its state, and
   only then deletes the old key. If any step fails, the live key stays live.
   If a store fails in a way that may still have saved the new key, keymolt
-  keeps both keys live and marks the new one as pending. `rotate-all` then
+  keeps both keys live and marks the new one as pending. The next `rotate-all`
+  tries again, so a brief outage fixes itself. If that fails too, `rotate-all`
   makes no more keys for that recipe until you fix the store and run
-  `keymolt rotate RECIPE`, so a broken schedule leaves one unused key, not one
-  per run.
+  `keymolt rotate RECIPE`. A broken schedule leaves at most two unused keys,
+  not one per run.
 
 ### Where the protection ends
 
