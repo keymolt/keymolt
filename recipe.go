@@ -14,7 +14,6 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -604,32 +603,56 @@ func lockDir(dir string) (func(), error) {
 	return func() { os.Remove(p) }, nil
 }
 
-// rotateAll rotates each recipe in a folder and logs one receipt line per recipe. Receipts hold no secrets.
+// rotateAll rotates each recipe in folder, and in every folder named keymolt below it, so one run covers many
+// projects. Each of those folders gets a log of one receipt line per recipe. Receipts hold no secrets.
 func rotateAll(folder string, w io.Writer) error {
-	logPath := filepath.Join(folder, "keymolt.log")
-	logf, err := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
-	if err != nil {
-		return err
+	if st, err := os.Stat(folder); err != nil || !st.IsDir() {
+		return fmt.Errorf("%s is not a folder", folder)
 	}
-	defer logf.Close()
-	paths, _ := filepath.Glob(filepath.Join(folder, "*.json"))
-	sort.Strings(paths)
-	failed := 0
-	for _, p := range paths {
-		if strings.HasPrefix(filepath.Base(p), ".") { // .keymolt-state.json is not a recipe
+	dirs := []string{folder}
+	_ = filepath.WalkDir(folder, func(p string, d os.DirEntry, err error) error {
+		switch {
+		case err != nil || !d.IsDir() || p == folder:
+		case d.Name() == "node_modules" || strings.HasPrefix(d.Name(), "."):
+			return filepath.SkipDir // large, and never hold recipes
+		case d.Name() == "keymolt":
+			dirs = append(dirs, p)
+		}
+		return nil
+	})
+	failed, logs := 0, []string{}
+	for _, dir := range dirs {
+		paths, _ := filepath.Glob(filepath.Join(dir, "*.json"))
+		paths = slices.DeleteFunc(paths, func(p string) bool {
+			if b := filepath.Base(p); strings.HasPrefix(b, ".") || strings.HasSuffix(b, ".example.json") {
+				return true // .keymolt-state.json, and templates to copy
+			}
+			m, err := readJSONFile(p)
+			return err == nil && m["create"] == nil // browser flows and other JSON; a broken recipe still runs and fails
+		})
+		if len(paths) == 0 {
 			continue
 		}
-		var line string
-		if r, err := rotate(p); err != nil {
-			failed++
-			line = failJSON(err)
-		} else {
-			b, _ := json.Marshal(r)
-			line = string(b)
+		logPath := filepath.Join(dir, "keymolt.log")
+		logf, err := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+		if err != nil {
+			return err
 		}
-		fmt.Fprintf(logf, "%s %s %s\n", time.Now().Format("2006-01-02 15:04:05"), filepath.Base(p), scrub(line))
+		for _, p := range paths {
+			var line string
+			if r, err := rotate(p); err != nil {
+				failed++
+				line = failJSON(err)
+			} else {
+				b, _ := json.Marshal(r)
+				line = string(b)
+			}
+			fmt.Fprintf(logf, "%s %s %s\n", time.Now().Format("2006-01-02 15:04:05"), filepath.Base(p), scrub(line))
+		}
+		logf.Close()
+		logs = append(logs, logPath)
 	}
-	printJSON(w, map[string]any{"ok": failed == 0, "failed": failed, "log": logPath})
+	printJSON(w, map[string]any{"ok": failed == 0, "failed": failed, "logs": logs})
 	if failed > 0 {
 		return errReported
 	}

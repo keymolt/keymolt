@@ -319,8 +319,12 @@ scheduler at `rotate-all` and let it run on its own:
 keymolt rotate-all ./recipes
 ```
 
-This rotates every recipe in a folder and appends one receipt line per recipe to
-`recipes/keymolt.log`. Trigger it from whatever scheduler you already have — your
+This rotates every recipe in a folder, and in every folder named `keymolt`
+below it. Each of those folders gets a `keymolt.log` with one receipt line per
+recipe. So if each project keeps its recipes in a `keymolt/` folder,
+`keymolt rotate-all C:\P` (or `~/code`) covers every project. It skips
+`node_modules`, hidden folders, `*.example.json` files and JSON files with no
+`create` step, such as browser flows. Trigger it from whatever scheduler you already have — your
 agent's runtime, a GitHub Actions cron, a Kubernetes CronJob, Railway cron, or a
 plain crontab entry.
 

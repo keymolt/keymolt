@@ -42,7 +42,7 @@ https://github.com/keymolt/keymolt/releases/latest, or with
 | keymolt made the key in use | `keymolt rotate RECIPE` |
 | A key made by hand is in use | `keymolt find RECIPE` prints its id. Then ask the user to run one of these in their terminal: `keymolt link RECIPE ID`, so your next `keymolt rotate RECIPE` replaces the key and deletes it, or `keymolt revoke RECIPE ID` to delete it now. |
 | A key may be leaked | If keymolt made it, `keymolt rotate RECIPE`. If it was made by hand, run `find`, ask the user to run `link`, then run `rotate`. That stores a new key, then deletes the leaked one. If the rotation fails, the user can `revoke` the leaked key anyway, but apps that use it stop working. |
-| Every recipe in a folder | `keymolt rotate-all FOLDER` |
+| Every recipe in a folder, and in each `keymolt` folder below it | `keymolt rotate-all FOLDER`. For example, `keymolt rotate-all C:\P` rotates every project that keeps its recipes in a `keymolt/` folder. |
 | Rotate on a schedule | Ask first, because this adds a task to the OS scheduler. Then run `keymolt schedule FOLDER monthly`. |
 
 Run `find` before `rotate`. After a rotation, the destination holds the new

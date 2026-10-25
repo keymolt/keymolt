@@ -345,14 +345,30 @@ func TestRotate(t *testing.T) {
 		}
 	})
 
-	t.Run("rotate-all writes one receipt line per recipe", func(t *testing.T) {
-		rdir := t.TempDir() // its own folder with exactly one recipe
-		writeJSON(t, filepath.Join(rdir, "one.json"), recipe)
+	t.Run("rotate-all writes one receipt line per recipe, in the folder and each keymolt folder below it", func(t *testing.T) {
+		rdir := t.TempDir() // its own folder, so state starts fresh
+		proj := filepath.Join(rdir, "app", "keymolt")
+		for _, p := range []string{filepath.Join(rdir, "one.json"), filepath.Join(proj, "two.json"),
+			filepath.Join(rdir, "app", "config", "three.json"),              // not in a keymolt folder
+			filepath.Join(rdir, "app", "node_modules", "keymolt", "x.json"), // never searched
+			filepath.Join(proj, "copy-me.example.json")} {                   // a template
+			if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			writeJSON(t, p, recipe)
+		}
+		writeJSON(t, filepath.Join(proj, "login.flow.json"), map[string]any{"steps": []any{}}) // not a recipe
+		created := f.n
 		code, out, _ := cli(t, "SECRET", "rotate-all", rdir)
-		log, _ := os.ReadFile(filepath.Join(rdir, "keymolt.log"))
-		if code != 0 || out["ok"] != true || strings.Count(string(log), "\n") != 1 || !strings.Contains(string(log), `"ok":true`) ||
-			strings.Contains(string(log), "SECRET") {
-			t.Fatal("rotate-all:", out, string(log))
+		for _, dir := range []string{rdir, proj} {
+			log, _ := os.ReadFile(filepath.Join(dir, "keymolt.log"))
+			if code != 0 || out["ok"] != true || strings.Count(string(log), "\n") != 1 || !strings.Contains(string(log), `"ok":true`) ||
+				strings.Contains(string(log), "SECRET") {
+				t.Fatal("rotate-all:", out, dir, string(log))
+			}
+		}
+		if f.n != created+2 || len(list(out["logs"])) != 2 {
+			t.Fatal("rotate-all must rotate exactly the two recipes:", f.n-created, out)
 		}
 	})
 
@@ -428,9 +444,14 @@ func maps(m map[string]any, kv ...any) map[string]any {
 func TestSchedulePlan(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "Weekly Keys")
 	name, files, cmds := schedulePlan(dir, "weekly", "windows", `C:\tools\keymolt.exe`, `C:\Users\me`)
-	if name != "keymolt-weekly-keys" || files != nil || !strings.Contains(cmds[0][3], "-StartWhenAvailable") ||
-		!strings.Contains(cmds[0][3], `'"rotate-all" "`) {
+	if !strings.HasPrefix(name, "keymolt-") || !strings.HasSuffix(name, "-weekly-keys") || files != nil ||
+		!strings.Contains(cmds[0][3], "-StartWhenAvailable") || !strings.Contains(cmds[0][3], `'"rotate-all" "`) {
 		t.Fatal("windows plan:", name, cmds)
+	}
+	a, _, _ := schedulePlan(filepath.Join(dir, "app-one", "keymolt"), "weekly", "windows", "keymolt.exe", "")
+	b, _, _ := schedulePlan(filepath.Join(dir, "app-two", "keymolt"), "weekly", "windows", "keymolt.exe", "")
+	if a == b {
+		t.Fatal("each project's keymolt folder must get its own job:", a)
 	}
 	_, files, cmds = schedulePlan(dir, "monthly", "darwin", "/usr/local/bin/keymolt", "/Users/me")
 	for _, plist := range files {
