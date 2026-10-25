@@ -47,18 +47,26 @@ that has no access to your vault.
 
 ## Install
 
-Download the file for your system from the
+The install script downloads the release for your system, checks its SHA-256
+against the release's `checksums.txt`, and installs it in your user folder. It
+needs no admin rights.
+
+On macOS or Linux, it installs to `~/.local/bin`:
+
+```
+curl -fsSL https://raw.githubusercontent.com/keymolt/keymolt/main/skills/keymolt/install.sh | sh
+```
+
+On Windows, it installs to `%LOCALAPPDATA%\keymolt` and adds that folder to your
+PATH:
+
+```
+powershell -NoProfile -c "irm https://raw.githubusercontent.com/keymolt/keymolt/main/skills/keymolt/install.ps1 | iex"
+```
+
+Or download the file for your system from the
 [latest release](https://github.com/keymolt/keymolt/releases/latest), rename it
 to `keymolt` (`keymolt.exe` on Windows), and put it in a folder on your PATH.
-`checksums.txt` in the release lists the SHA-256 of each file.
-
-On macOS or Linux:
-
-```
-curl -fsSL -o keymolt "https://github.com/keymolt/keymolt/releases/latest/download/keymolt_$(uname -s | tr A-Z a-z)_$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')"
-chmod +x keymolt && sudo mv keymolt /usr/local/bin/
-```
-
 The binaries are not signed. If you download one with a browser, macOS blocks
 it until you run `xattr -d com.apple.quarantine keymolt`, and Windows SmartScreen
 may ask you to confirm.
@@ -78,11 +86,15 @@ go build -o keymolt .
 Credentials live in your OS vault: Keychain on macOS, Credential Manager on
 Windows, Secret Service on Linux.
 
-To teach your coding agent to use keymolt, install its skill:
+To teach your coding agents to use keymolt in every project, install its skill
+globally:
 
 ```
-npx skills add keymolt/keymolt
+npx skills add keymolt/keymolt -g
 ```
+
+If keymolt isn't installed yet, the agent asks you first, then runs the same
+install script.
 
 The skill tells the agent which command fits each task, to leave `cred-set` and
 `approve` to you, and never to read a key.

@@ -16,6 +16,10 @@ jobs:
         with:
           go-version-file: go.mod
       - run: go test ./...
+      - name: Check the install scripts install this version
+        run: |
+          grep -q "^version=$GITHUB_REF_NAME " skills/keymolt/install.sh
+          grep -q "^\$version = '$GITHUB_REF_NAME' " skills/keymolt/install.ps1
       - name: Build
         run: |
           for t in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64; do

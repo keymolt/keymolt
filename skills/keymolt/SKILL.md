@@ -30,9 +30,17 @@ never holds the key.
 ## Check the install
 
 Run `keymolt` with no arguments. It prints its commands. If the command is
-missing, ask the user to install it from
-https://github.com/keymolt/keymolt/releases/latest, or with
-`go install github.com/keymolt/keymolt@latest`.
+missing, ask the user before you install it. This skill's folder has an install
+script that downloads the matching release and checks its SHA-256:
+
+| System | Command | Installs to |
+|---|---|---|
+| macOS, Linux | `sh install.sh` | `~/.local/bin/keymolt` |
+| Windows | `powershell -NoProfile -ExecutionPolicy Bypass -File install.ps1` | `%LOCALAPPDATA%\keymolt\keymolt.exe` |
+
+Your shell keeps its old PATH, so call keymolt by the full path above until the
+user opens a new terminal. If the script says another keymolt comes first on
+the PATH, tell the user which one runs.
 
 ## Choose the command
 
