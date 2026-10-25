@@ -13,8 +13,10 @@ import (
 	"path/filepath"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
+	"unicode"
 
 	"github.com/zalando/go-keyring"
 	"golang.org/x/term"
@@ -156,6 +158,21 @@ func readRecipe(path string) (map[string]any, string, error) {
 	return recipe, hex.EncodeToString(h.Sum(nil)), nil
 }
 
+// visible shows recipe text as text: a terminal would act on characters such as \r or a text-direction mark, so
+// a recipe could draw a fake destination over the real one on the approval screen.
+func visible(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		if unicode.IsGraphic(r) {
+			b.WriteRune(r)
+		} else {
+			q := strconv.QuoteRune(r)
+			b.WriteString(q[1 : len(q)-1])
+		}
+	}
+	return b.String()
+}
+
 // childEnv is the environment for commands and the browser: keymolt's own, minus the credentials CI passes in
 // KEYMOLT_CRED_*, which would otherwise reach every program a recipe runs, on any host.
 func childEnv() []string {
@@ -174,11 +191,6 @@ func approved(h string) bool {
 	}
 	_, err := keyring.Get(vaultService, "approval:"+h)
 	return err == nil
-}
-
-func isApproved(path string) bool {
-	_, h, err := readRecipe(path)
-	return err == nil && approved(h)
 }
 
 // loadApproved reads a recipe for a run, and refuses it unless a human approved these exact bytes.
@@ -220,20 +232,25 @@ func approveCommand(target string, w io.Writer) error {
 			if len(paths) == 1 {
 				return err
 			}
-			fmt.Fprintf(w, "skipping %s: %v\n", p, err) // one broken recipe shouldn't block the others
+			fmt.Fprintf(w, "skipping %s\n", visible(fmt.Sprintf("%s: %v", p, err))) // one broken recipe shouldn't block the others
 			continue
 		}
 		if approved(h) {
+			if len(paths) == 1 { // CI needs the hash in KEYMOLT_APPROVED
+				fmt.Fprintf(w, "%s is already approved (sha256 %s)\n", visible(p), h)
+			}
 			continue
 		}
-		fmt.Fprintf(w, "%s (sha256 %s) sends keys to:\n", p, h)
+		fmt.Fprintf(w, "%s (sha256 %s) sends keys to:\n", visible(p), h)
 		for _, d := range recipeDestinations(recipe) {
-			fmt.Fprintf(w, "  %s\n", d)
+			fmt.Fprintf(w, "  %s\n", visible(d))
 		}
 		hashes = append(hashes, h)
 	}
 	if len(hashes) == 0 {
-		fmt.Fprintln(w, "nothing to approve: every recipe here is already approved")
+		if len(paths) > 1 {
+			fmt.Fprintln(w, "nothing to approve: every recipe here is already approved")
+		}
 		return nil
 	}
 	fmt.Fprintf(w, "Approve %d recipe(s)? [y/N] ", len(hashes))

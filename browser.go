@@ -235,6 +235,10 @@ func runFlow(flow map[string]any, vars map[string]string) ([]byte, error) {
 				stepCancel()
 				return nil, credErr
 			}
+			if host == "" && scrub(value) != value { // the new key, too, only goes to https pages or localhost
+				stepCancel()
+				return nil, errors.New("refusing to type a key into a page that isn't https")
+			}
 			err = chromedp.Do(stepCtx, fillAction(str(step["fill"]), value))
 		case step["capture"] != nil:
 			if pattern, err = regexp.Compile(str(step["capture"])); err == nil {

@@ -106,6 +106,6 @@ one JSON line. On success, `ok` is `true`. On failure, the output is
 | `run ... in a real terminal`, or `keymolt doesn't track key` | Ask the user to run the quoted command in their own terminal |
 | `the destination already holds a key` | Use `find`, then the "made by hand" row above |
 | `keymolt already made a key for this recipe` | Use `rotate` instead of `create` |
-| `store #N failed (...), and it may hold the new key` | Both keys stay live. Fix the cause, then run `rotate` again. |
+| `store #N failed ...` ending in `both live, rerun` | A destination may hold the new key, so both keys stay live. Fix the cause, then run `rotate` again. |
 | `new key ... could not be revoked` | keymolt still tracks it, and the next `rotate` revokes it |
 | `another keymolt run is using this folder` | Wait for the other run. If none is running, tell the user the lock file's path. |

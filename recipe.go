@@ -126,6 +126,12 @@ func eachStep(recipe map[string]any, add func(label string, step map[string]any)
 	}
 }
 
+// refused reports a store the destination clearly turned down, so the new key can't have landed there.
+// detail is what call reports: "http 4xx" for a rejected request, "command not found" for a tool that never ran.
+func refused(detail string) bool {
+	return detail == "command not found" || strings.HasPrefix(detail, "http 4")
+}
+
 // flowPath is where a browser step's flow file is: relative paths start at the recipe's folder.
 func flowPath(step map[string]any, dir string) string {
 	flow := str(step["browser"])
@@ -421,7 +427,7 @@ func runRecipe(recipePath string, createOnly bool) (*receipt, error) {
 	ctx["new"], ctx["new_id"] = str(newValue), str(newID)
 	addSecret(ctx["new"])
 	if ctx["new_id"] != "" && !keyID.MatchString(ctx["new_id"]) {
-		return nil, fmt.Errorf("create returned an id keymolt can't put in a URL safely; check the provider for an orphaned key")
+		return nil, fmt.Errorf("create returned id %q, which keymolt can't put in a URL safely; delete that key at the provider", ctx["new_id"])
 	}
 	// track the new key before anything else can fail, so a crash or a failed cleanup never leaves it live and unknown
 	if ctx["new_id"] != "" {
@@ -500,18 +506,17 @@ func runRecipe(recipePath string, createOnly bool) (*receipt, error) {
 	for i, d := range asList(recipe["store"]) {
 		dest := asMap(d)
 		ok, _, detail, err := call(dest, ctx, dir)
-		if err != nil && len(out.Stored) == 0 { // failed before sending anything, so no destination uses the new key
-			return nil, discard(fmt.Sprintf("store #%d failed (%v)", i, err))
-		}
 		if err != nil {
 			ok, detail = false, err.Error()
 		}
+		if !ok && len(out.Stored) == 0 && (err != nil || refused(detail)) { // no destination got the new key
+			return nil, discard(fmt.Sprintf("store #%d failed (%s)", i, detail))
+		}
 		if !ok {
-			// the store may have landed even though it failed, such as a timeout after the write, and other
-			// destinations may hold the new key already: keep every key live, and revoke the old ones next run
-			state[stateKey] = track(oldLive)
-			if e := saveState(); e != nil {
-				return nil, fmt.Errorf("store #%d failed and state save failed (%v); keys may be untracked, check the provider", i, e)
+			// the store may have landed anyway, such as a timeout after the write, or earlier stores did: keep every
+			// key live. State already has the old key as current and the new one as stale, so the next run revokes it.
+			if len(out.Stored) > 0 {
+				return nil, fmt.Errorf("store #%d failed (%s) after storing to %v; old and new keys both live, rerun", i, detail, out.Stored)
 			}
 			return nil, fmt.Errorf("store #%d failed (%s), and it may hold the new key; old and new keys both live, rerun", i, detail)
 		}

