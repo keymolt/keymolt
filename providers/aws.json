@@ -1,3 +1,0 @@
-{
-  "detect": {"name": "AWS", "value": "^(AKIA|ASIA)[A-Z0-9]{16}$"}
-}

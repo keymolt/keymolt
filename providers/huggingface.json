@@ -1,3 +1,0 @@
-{
-  "detect": {"name": "HUGGINGFACE|^HF_", "value": "^hf_"}
-}

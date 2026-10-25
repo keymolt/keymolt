@@ -1,7 +1,6 @@
 keymolt.exe
 /keymolt
 _viz/
-rescued/
 .keymolt-state.json
 keymolt.log
 .keymolt.lock

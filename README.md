@@ -351,33 +351,6 @@ If you have no scheduler, `keymolt schedule` is a shortcut that registers
 keymolt schedule ./recipes weekly
 ```
 
-## Breach rescue (Railway)
-
-If a Railway project's keys are exposed, scan it and rotate every key that has a
-provider template, in one pass:
-
-```
-keymolt rescue scan RAILWAY_PROJECT_ID      # list the keys and their providers; changes nothing
-keymolt rescue rotate RAILWAY_PROJECT_ID    # rotate each key with a template, store it back
-```
-
-`rescue` reads each service's variables and each environment's shared
-variables, names each key's provider, and writes the new keys back where it
-found them. It prints only the last four characters of any key.
-
-Variables that reference another variable (`${{shared.NAME}}`,
-`${{Postgres.DATABASE_URL}}`) are skipped. `rescue` writes the new key only to
-the variable they point to, so every reference still works and picks up the
-new key.
-
-## Providers and templates
-
-Provider detection and templates are data files in `providers/`. Each is a
-recipe template plus a `detect` block (a variable-name pattern and a key-value
-pattern). Adding a provider is a new JSON file, not a new release. Drop your own
-templates in `~/.keymolt/templates` (or set `KEYMOLT_PROVIDERS`); templates you
-add are untrusted and need `approve`, like any recipe.
-
 ## In CI, without an OS vault
 
 Set the credential and its hosts as environment variables instead of using the

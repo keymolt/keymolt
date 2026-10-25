@@ -1,3 +1,0 @@
-{
-  "detect": {"name": "DATABASE|DB_URL|POSTGRES|MYSQL|MONGO|REDIS", "value": "^\\w+(\\+srv)?://[^:/@]+:[^@]+@"}
-}

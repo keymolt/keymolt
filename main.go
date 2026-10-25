@@ -8,23 +8,20 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"strings"
 )
 
 const usage = `keymolt: create, store, verify and revoke API keys without printing them.
 
-  keymolt cred-set NAME HOST [HOST ...]              human, once: hidden prompt, saves a credential locked to these hosts
-  keymolt approve RECIPE                             human, once: shows where a recipe sends keys, then trusts it
-  keymolt create RECIPE                              first key: new key -> verify -> store. Refuses if keymolt already made one.
-  keymolt rotate RECIPE                              new key -> verify -> store -> revoke old. Prints metadata only.
-  keymolt find RECIPE                                print the id of the key the recipe's destination holds now
-  keymolt link RECIPE ID                             human: track key ID, so the next rotate replaces it, then revokes it
-  keymolt revoke RECIPE ID                           revoke key ID now, without a new one. Human, for a key keymolt doesn't track.
-  keymolt rotate-all FOLDER                          rotate every recipe in FOLDER and in each .keymolt folder below it; logs to keymolt.log
+  keymolt cred-set NAME HOST [HOST ...]  human, once: hidden prompt, saves a credential locked to these hosts
+  keymolt approve RECIPE                 human, once: shows where a recipe sends keys, then trusts it
+  keymolt create RECIPE                  first key: new key -> verify -> store. Refuses if keymolt already made one.
+  keymolt rotate RECIPE                  new key -> verify -> store -> revoke old. Prints metadata only.
+  keymolt find RECIPE                    print the id of the key the recipe's destination holds now
+  keymolt link RECIPE ID                 human: track key ID, so the next rotate replaces it, then revokes it
+  keymolt revoke RECIPE ID               revoke key ID now, without a new one. Human, for a key keymolt doesn't track.
+  keymolt rotate-all FOLDER              rotate every recipe in FOLDER and in each .keymolt folder below it; logs to keymolt.log
   keymolt schedule FOLDER weekly|monthly             run rotate-all on a schedule (Task Scheduler, launchd or systemd)
-  keymolt rescue scan RAILWAY_PROJECT_ID             after a breach: list every key in a Railway project
-  keymolt rescue rotate RAILWAY_PROJECT_ID [k=v ...] ...and rotate each key that has a provider template
-  keymolt browser login PROFILE URL                  human, once: log in by hand in a visible browser
+  keymolt browser login PROFILE URL      human, once: log in by hand in a visible browser
 
 Recipe strings may use {{cred:NAME}}, {{new}}, {{new_id}}, {{old_id}}, {{ts}}.
 Step kinds: HTTP ("url"), command ("cmd", the new key arrives on stdin), browser flow ("browser"),
@@ -81,10 +78,6 @@ func run(args []string, w io.Writer) (code int) {
 		err = rotateAll(args[1], w)
 	case len(args) == 3 && args[0] == "schedule":
 		err = schedule(args[1], args[2], w)
-	case len(args) == 3 && args[0] == "rescue" && args[1] == "scan":
-		err = rescueScan(args[2], w)
-	case len(args) >= 3 && args[0] == "rescue" && args[1] == "rotate":
-		err = rescueRotate(args[2], kvArgs(args[3:]), w)
 	case len(args) == 4 && args[0] == "browser" && args[1] == "login":
 		err = browserLogin(args[2], args[3])
 	default:
@@ -99,16 +92,6 @@ func run(args []string, w io.Writer) (code int) {
 		return 1
 	}
 	return 0
-}
-
-func kvArgs(args []string) map[string]string {
-	m := map[string]string{}
-	for _, a := range args {
-		if k, v, ok := strings.Cut(a, "="); ok {
-			m[k] = v
-		}
-	}
-	return m
 }
 
 // --- output: everything printed goes through scrub ------------------------------------------
