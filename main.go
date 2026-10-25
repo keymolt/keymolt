@@ -13,7 +13,7 @@ import (
 const usage = `keymolt: create, store, verify and revoke API keys without printing them.
 
   keymolt cred-set NAME HOST [HOST ...]  human, once: hidden prompt, saves a credential locked to these hosts
-  keymolt approve RECIPE                 human, once: shows where a recipe sends keys, then trusts it
+  keymolt approve RECIPE|FOLDER          human: shows where new or changed recipes send keys, asks, then trusts them
   keymolt create RECIPE                  first key: new key -> verify -> store. Refuses if keymolt already made one.
   keymolt rotate RECIPE                  new key -> verify -> store -> revoke old. Prints metadata only.
   keymolt find RECIPE                    print the id of the key the recipe's destination holds now

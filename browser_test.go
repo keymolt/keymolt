@@ -89,7 +89,8 @@ func TestBrowserFlow(t *testing.T) {
 
 	// host lock: a password locked to another site is never filled on this page
 	t.Setenv("KEYMOLT_HOSTS_DASHPW", "example.com")
-	if _, err := runFlow(createFlow, map[string]string{"name": "x"}); err == nil ||
+	flow, _ := readJSONFile(createFlow)
+	if _, err := runFlow(flow, map[string]string{"name": "x"}); err == nil ||
 		!strings.Contains(err.Error(), "may only go to https://example.com") || len(d.keys) != 0 {
 		if errors.Is(err, errNoBrowser) {
 			t.Skip("no Chromium-based browser here")

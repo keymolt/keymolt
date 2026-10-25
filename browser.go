@@ -97,7 +97,8 @@ func browserPath(goos string, lookPath func(string) (string, error)) string {
 }
 
 func newBrowser(profile string, visible bool) (context.Context, context.CancelFunc) {
-	opts := append(chromedp.DefaultExecAllocatorOptions[:], chromedp.UserDataDir(profileDir(profile)))
+	opts := append(chromedp.DefaultExecAllocatorOptions[:], chromedp.UserDataDir(profileDir(profile)),
+		chromedp.NoInheritEnv, chromedp.Env(childEnv()...))
 	if p := browserPath(runtime.GOOS, exec.LookPath); p != "" {
 		opts = append(opts, chromedp.ExecPath(p))
 	}
@@ -127,11 +128,7 @@ func fillAction(sel, value string) chromedp.Action[chromedp.Void] {
 }
 
 // runFlow runs a browser flow and returns {"id": ..., "value": key} as JSON, or {} when the flow has no capture.
-func runFlow(path string, vars map[string]string) ([]byte, error) {
-	flow, err := readJSONFile(path)
-	if err != nil {
-		return nil, err
-	}
+func runFlow(flow map[string]any, vars map[string]string) ([]byte, error) {
 	profile, err := renderString(str(flow["profile"]), vars, "")
 	if err != nil {
 		return nil, err

@@ -22,8 +22,9 @@ func slug(s string) string {
 }
 
 // schedulePlan returns the files to write and commands to run so the OS scheduler runs rotate-all.
-// It is pure so every OS can be tested from any OS.
-func schedulePlan(folder, cadence, goos, exe, home string) (name string, files map[string]string, cmds [][]string) {
+// It is pure so every OS can be tested from any OS. pathEnv is the PATH to give the job: launchd and systemd start
+// jobs with a bare one, where tools such as npx from Homebrew or nvm are missing.
+func schedulePlan(folder, cadence, goos, exe, home, pathEnv string) (name string, files map[string]string, cmds [][]string) {
 	abs, _ := filepath.Abs(folder)
 	// from the whole path, so each project's .keymolt folder gets its own job.
 	// shortcut: paths that differ only in case or punctuation share a job, add a hash if that ever bites
@@ -47,7 +48,8 @@ func schedulePlan(folder, cadence, goos, exe, home string) (name string, files m
 		if !weekly {
 			when = "<key>Day</key><integer>1</integer>"
 		}
-		var progArgs strings.Builder
+		var progArgs, pathXML strings.Builder
+		_ = xml.EscapeText(&pathXML, []byte(pathEnv))
 		for _, a := range argv {
 			progArgs.WriteString("<string>")
 			_ = xml.EscapeText(&progArgs, []byte(a))
@@ -58,6 +60,7 @@ func schedulePlan(folder, cadence, goos, exe, home string) (name string, files m
 <plist version="1.0"><dict>
 <key>Label</key><string>com.` + name + `</string>
 <key>ProgramArguments</key><array>` + progArgs.String() + `</array>
+<key>EnvironmentVariables</key><dict><key>PATH</key><string>` + pathXML.String() + `</string></dict>
 <key>StartCalendarInterval</key><dict>` + when + `<key>Hour</key><integer>3</integer><key>Minute</key><integer>0</integer></dict>
 </dict></plist>
 `
@@ -65,17 +68,19 @@ func schedulePlan(folder, cadence, goos, exe, home string) (name string, files m
 	}
 	// Linux: a systemd user timer, not cron, because it catches up missed runs and can reach the desktop keyring
 	unit := filepath.Join(home, ".config", "systemd", "user", name)
+	quote := func(a string) string {
+		return `"` + strings.NewReplacer(`\`, `\\`, `"`, `\"`, "%", "%%").Replace(a) + `"` // % starts a systemd specifier
+	}
 	quoted := make([]string, len(argv))
 	for i, a := range argv {
-		a = strings.NewReplacer(`\`, `\\`, `"`, `\"`, "%", "%%").Replace(a) // % starts a systemd specifier
-		quoted[i] = `"` + a + `"`
+		quoted[i] = quote(a)
 	}
 	calendar := "Sun *-*-* 03:00"
 	if !weekly {
 		calendar = "*-*-01 03:00"
 	}
 	files = map[string]string{
-		unit + ".service": "[Service]\nType=oneshot\nExecStart=" + strings.Join(quoted, " ") + "\n",
+		unit + ".service": "[Service]\nType=oneshot\nEnvironment=" + quote("PATH="+pathEnv) + "\nExecStart=" + strings.Join(quoted, " ") + "\n",
 		unit + ".timer":   "[Timer]\nOnCalendar=" + calendar + "\nPersistent=true\n\n[Install]\nWantedBy=timers.target\n",
 	}
 	return name, files, [][]string{{"systemctl", "--user", "daemon-reload"}, {"systemctl", "--user", "enable", "--now", name + ".timer"}}
@@ -90,7 +95,7 @@ func schedule(folder, cadence string, w io.Writer) error {
 		return err
 	}
 	home, _ := os.UserHomeDir()
-	name, files, cmds := schedulePlan(folder, cadence, runtime.GOOS, exe, home)
+	name, files, cmds := schedulePlan(folder, cadence, runtime.GOOS, exe, home, os.Getenv("PATH"))
 	for path, text := range files {
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 			return err

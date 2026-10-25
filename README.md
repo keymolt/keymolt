@@ -24,14 +24,17 @@ The human keeps the power to see secrets and to decide where they may go.
 
 - **Secrets never reach the agent.** Not in output, not in logs, not in command
   arguments. Values are redacted from everything printed. Command steps receive
-  the key on stdin, never on the command line.
+  the key on stdin, and a recipe that puts `{{new}}` on a command line is
+  refused.
 - **A key only goes to hosts you allowed.** Each credential is locked to a list
   of hosts, and only over HTTPS. A recipe that tries to send a key anywhere else
-  fails.
+  fails. The new key also travels only over HTTPS (or to localhost), and
+  keymolt refuses a redirect to another host or down to plain HTTP.
 - **A recipe can only run after a human approves it.** `approve` prints every
-  destination the recipe sends keys to, then records a hash of the file and of
-  any browser flow files it uses. Edit any of them and approval is gone. `approve` only runs in a real terminal, and
-  there is no switch that approves every recipe.
+  destination the recipe sends keys to and asks you to confirm. It records a
+  hash of the file and of any browser flow files it uses, and each run uses the
+  exact bytes it checked. Edit any of them and approval is gone. `approve` only
+  runs in a real terminal, and there is no switch that approves every recipe.
 - **A rotation never leaves you without a working key.** keymolt makes the new
   key, tests it, stores it everywhere the old one lived, saves its state, and
   only then deletes the old key. If any step fails, the live key stays live.
@@ -44,6 +47,12 @@ agent with a full shell as your OS user can do anything you can. It can read
 the OS vault, write approvals into it, and set keymolt's environment variables.
 To guard against that agent, run it as a different OS user, or in a sandbox
 that has no access to your vault.
+
+keymolt records the keys it made in `.keymolt-state.json`, next to the recipes.
+Approval doesn't cover that file. Someone who can edit it can change which
+tracked key the next `rotate` or `revoke` deletes. They can't make keymolt send
+a key anywhere new, and ids from the file are checked before they go into a
+URL.
 
 ## Install
 
@@ -120,7 +129,12 @@ keymolt approve openai-to-railway.example.json
 ```
 
 It prints where the recipe creates, verifies, stores and revokes keys. Read the
-list. If it is correct, confirm, and the exact file is trusted from now on.
+list. If it is correct, answer `y`, and the exact file is trusted from now on.
+
+To approve many recipes at once, give a folder: `keymolt approve FOLDER` covers
+the recipes in it and in each `.keymolt` folder below it, the same ones
+`rotate-all` runs. It lists only recipes that are new or changed, then asks
+once.
 
 **3. Create the first key, then rotate it later.**
 
@@ -163,9 +177,11 @@ Each step is one of four kinds:
 - **`url`** — an HTTP request (`method`, `url`, `headers`, `body`). For `create`,
   `value` and `id` are dotted paths into the JSON response.
 - **`cmd`** — a command line, as a list. The new key arrives on the command's
-  **stdin**, never in the arguments. Call a published tool, such as
-  `npx convex`. Approval covers the command line, not the contents of a script
-  it runs, so a script in the recipe's folder could change after approval.
+  **stdin**, and `{{new}}` can't go in the arguments. Call a published tool,
+  such as `npx convex`. Approval covers the command line, not the code it runs:
+  a script in the recipe's folder, or a package `npx` loads from the project's
+  `node_modules`, could change after approval. Commands don't get keymolt's
+  `KEYMOLT_CRED_*` variables.
 - **`browser`** — a saved browser flow, for providers that only make keys in a
   dashboard.
 - **`vault`** — saves the new key back into the vault under a name, so an admin
@@ -176,7 +192,7 @@ Strings in a recipe may use these placeholders:
 | Placeholder | Becomes |
 |-------------|---------|
 | `{{cred:NAME}}` | a credential from the vault (checked against its host lock) |
-| `{{new}}` | the new key's value |
+| `{{new}}` | the new key's value. Only over HTTPS or to localhost, never on a command line. |
 | `{{new_id}}` | the new key's id |
 | `{{old_id}}` | the previous key's id (for `revoke`) |
 | `{{ts}}` | a timestamp, handy for naming keys |
@@ -351,6 +367,11 @@ If you have no scheduler, `keymolt schedule` is a shortcut that registers
 keymolt schedule ./recipes weekly
 ```
 
+launchd and systemd jobs get the PATH you ran `schedule` with, so tools such as
+`npx` from Homebrew or nvm still work. Run `schedule` again after you change
+your PATH. On Windows, `monthly` means every four weeks, because Task
+Scheduler's PowerShell module has no monthly trigger.
+
 ## In CI, without an OS vault
 
 Set the credential and its hosts as environment variables instead of using the
@@ -362,11 +383,13 @@ KEYMOLT_HOSTS_OPENAI_ADMIN=api.openai.com
 ```
 
 The name after the prefix is the credential name, upper-cased. Hosts are
-comma-separated.
+comma-separated. Commands a recipe runs, and the browser, don't get these
+variables. A tool that needs its own token, such as `gh`, reads it from its own
+variable, such as `GH_TOKEN`.
 
 CI has no vault for approvals either. List the SHA-256 hash of each recipe you
-trust in `KEYMOLT_APPROVED`, comma-separated. `keymolt approve` prints the
-hash. For a recipe with no browser flows, `sha256sum recipe.json` gives the
+trust in `KEYMOLT_APPROVED`, comma-separated. `keymolt approve` prints each
+recipe's hash before it asks. For a recipe with no browser flows, `sha256sum recipe.json` gives the
 same hash. Store the list as a CI secret, so
 a pull request that edits a recipe can't run it until you update the list. The
 hash covers the exact bytes, so keep git from changing line endings in recipe

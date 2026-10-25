@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -110,84 +111,142 @@ func credSetPrompt(name string, hosts []string, w io.Writer) error {
 // A recipe says where keys go. A prompt-injected agent could add an exfiltration destination.
 // So a human approves a recipe once, by its exact bytes. Editing the file revokes approval.
 
-// recipeHash is the SHA-256 of the recipe file. With browser flows, it also covers each flow file, since a flow
-// decides which pages see the new key.
-func recipeHash(path string) (string, error) {
+// readRecipe reads a recipe and each browser flow it uses, once, and checks its steps. It returns the recipe, with
+// each flow attached to its step, and the hash approval covers: the recipe file's SHA-256, or with flows, the
+// SHA-256 of the recipe's and each flow's SHA-256. Runs use what it returns, so they run the bytes that were approved.
+func readRecipe(path string) (map[string]any, string, error) {
 	b, err := os.ReadFile(path)
 	if err != nil {
-		return "", err
+		return nil, "", err
+	}
+	recipe, ok := decode(b).(map[string]any)
+	if !ok {
+		return nil, "", fmt.Errorf("%s is not a JSON object", path)
 	}
 	sum := sha256.Sum256(b)
-	var flows [][32]byte
-	recipe, _ := decode(b).(map[string]any)
-	eachStep(recipe, func(_ string, step map[string]any) {
-		if step["browser"] != nil && err == nil {
-			var fb []byte
-			fb, err = os.ReadFile(flowPath(step, filepath.Dir(path)))
-			flows = append(flows, sha256.Sum256(fb))
-		}
-	})
-	if err != nil {
-		return "", err
-	}
-	if len(flows) == 0 { // the plain file hash, so `sha256sum recipe.json` gives it too
-		return hex.EncodeToString(sum[:]), nil
-	}
-	h := sha256.New()
+	h, flows := sha256.New(), 0
 	h.Write(sum[:])
-	for _, f := range flows {
-		h.Write(f[:])
+	eachStep(recipe, func(_ string, step map[string]any) {
+		if step["browser"] == nil || err != nil {
+			return
+		}
+		var fb []byte
+		if fb, err = os.ReadFile(flowPath(step, filepath.Dir(path))); err != nil {
+			return
+		}
+		fsum := sha256.Sum256(fb)
+		h.Write(fsum[:])
+		flows++
+		flow, ok := decode(fb).(map[string]any)
+		if !ok {
+			err = fmt.Errorf("%s is not a JSON object", str(step["browser"]))
+			return
+		}
+		step[loadedFlow] = flow
+	})
+	if err == nil {
+		err = checkSteps(recipe)
 	}
-	return hex.EncodeToString(h.Sum(nil)), nil
+	if err != nil {
+		return nil, "", err
+	}
+	if flows == 0 { // the plain file hash, so `sha256sum recipe.json` gives it too
+		return recipe, hex.EncodeToString(sum[:]), nil
+	}
+	return recipe, hex.EncodeToString(h.Sum(nil)), nil
 }
 
-func approveRecipeFile(path string) error {
-	h, err := recipeHash(path)
-	if err != nil {
-		return err
-	}
-	return keyring.Set(vaultService, "approval:"+h, "1")
+// childEnv is the environment for commands and the browser: keymolt's own, minus the credentials CI passes in
+// KEYMOLT_CRED_*, which would otherwise reach every program a recipe runs, on any host.
+func childEnv() []string {
+	return slices.DeleteFunc(os.Environ(), func(kv string) bool { return strings.HasPrefix(strings.ToUpper(kv), "KEYMOLT_CRED_") })
 }
 
 // approveAll lets tests run the recipes they build. Only test code can set it.
 var approveAll bool
 
-// isApproved reports whether this exact recipe file was approved, in the vault or, for CI where there is no
-// vault, in KEYMOLT_APPROVED (comma-separated SHA-256 hashes). There is no switch that approves everything.
-func isApproved(path string) bool {
-	h, err := recipeHash(path)
-	if err != nil {
-		return false
-	}
+// approved reports whether a human approved this recipe hash, in the vault or, for CI where there is no vault,
+// in KEYMOLT_APPROVED (comma-separated hashes). There is no switch that approves everything.
+func approved(h string) bool {
 	if approveAll || slices.ContainsFunc(strings.Split(os.Getenv("KEYMOLT_APPROVED"), ","),
 		func(s string) bool { return strings.TrimSpace(s) == h }) {
 		return true
 	}
-	_, err = keyring.Get(vaultService, "approval:"+h)
+	_, err := keyring.Get(vaultService, "approval:"+h)
 	return err == nil
 }
 
-// atTerminal reports whether a person is likely at the keyboard: an agent's shell has no terminal on stdin.
-// Tests replace it.
-var atTerminal = func() bool { return term.IsTerminal(int(os.Stdin.Fd())) }
+func isApproved(path string) bool {
+	_, h, err := readRecipe(path)
+	return err == nil && approved(h)
+}
 
-func approveCommand(path string, w io.Writer) error {
-	if !atTerminal() {
-		return errors.New("run `keymolt approve` in a real terminal: it confirms you trust where this recipe sends keys")
-	}
-	recipe, err := readJSONFile(path)
+// loadApproved reads a recipe for a run, and refuses it unless a human approved these exact bytes.
+func loadApproved(path string) (map[string]any, error) {
+	recipe, h, err := readRecipe(path)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	fmt.Fprintf(w, "Recipe %s sends keys to:\n", path)
-	for _, d := range recipeDestinations(recipe, filepath.Dir(path)) {
-		fmt.Fprintf(w, "  %s\n", d)
+	if !approved(h) {
+		return nil, fmt.Errorf("recipe not approved: run `keymolt approve %s` in a terminal first", path)
 	}
-	if err := approveRecipeFile(path); err != nil {
-		return fmt.Errorf("could not save approval: %v", err)
+	return recipe, nil
+}
+
+// atTerminal reports whether a person is likely at the keyboard: an agent's shell has no terminal on stdin.
+// Tests replace it, and stdin.
+var (
+	atTerminal           = func() bool { return term.IsTerminal(int(os.Stdin.Fd())) }
+	stdin      io.Reader = os.Stdin
+)
+
+// approveCommand shows where each new or changed recipe sends keys, then approves them all if the person says yes.
+// target is a recipe, or a folder: then every recipe rotate-all would run.
+func approveCommand(target string, w io.Writer) error {
+	if !atTerminal() {
+		return errors.New("run `keymolt approve` in a real terminal: it confirms you trust where these recipes send keys")
 	}
-	h, _ := recipeHash(path)
-	fmt.Fprintf(w, "approved (sha256 %s). `keymolt rotate` will run this recipe until its file changes.\n", h)
+	paths := []string{target}
+	if st, err := os.Stat(target); err == nil && st.IsDir() {
+		paths = nil
+		for _, group := range findRecipes(target) {
+			paths = append(paths, group...)
+		}
+	}
+	var hashes []string
+	for _, p := range paths {
+		recipe, h, err := readRecipe(p)
+		if err != nil {
+			if len(paths) == 1 {
+				return err
+			}
+			fmt.Fprintf(w, "skipping %s: %v\n", p, err) // one broken recipe shouldn't block the others
+			continue
+		}
+		if approved(h) {
+			continue
+		}
+		fmt.Fprintf(w, "%s (sha256 %s) sends keys to:\n", p, h)
+		for _, d := range recipeDestinations(recipe) {
+			fmt.Fprintf(w, "  %s\n", d)
+		}
+		hashes = append(hashes, h)
+	}
+	if len(hashes) == 0 {
+		fmt.Fprintln(w, "nothing to approve: every recipe here is already approved")
+		return nil
+	}
+	fmt.Fprintf(w, "Approve %d recipe(s)? [y/N] ", len(hashes))
+	answer, _ := bufio.NewReader(stdin).ReadString('\n')
+	if a := strings.ToLower(strings.TrimSpace(answer)); a != "y" && a != "yes" {
+		return errors.New("not approved")
+	}
+	for _, h := range hashes {
+		if err := keyring.Set(vaultService, "approval:"+h, "1"); err != nil {
+			return fmt.Errorf("could not save approval: %v", err)
+		}
+	}
+	fmt.Fprintf(w, "approved %d recipe(s). keymolt runs each one until its file, or a flow it uses, changes.\n", len(hashes))
 	return nil
 }
 
@@ -236,20 +295,21 @@ func httpsList(hosts []string) string {
 }
 
 // vaultReplace is the store step for admin keys: the new key replaces credential name and keeps its host lock.
-func vaultReplace(name, value string) (bool, string) {
+// err means it stopped before writing anything.
+func vaultReplace(name, value string) (bool, string, error) {
 	if os.Getenv(envName("KEYMOLT_CRED_", name)) != "" {
-		return false, "vault: credential comes from an env var; store it with a cmd step such as gh secret set"
+		return false, "", errors.New("vault: credential comes from an env var; store it with a cmd step such as gh secret set")
 	}
 	c, err := credLoad(name)
 	if err != nil {
-		return false, "vault: no credential " + name
+		return false, "", errors.New("vault: no credential " + name)
 	}
 	if err := credSet(name, value, c.Hosts); err != nil {
-		return false, "vault: write failed"
+		return false, "vault: write failed", nil
 	}
 	// read back before anything revokes the old key: a bad write here would lock the user out
 	back, err := credLoad(name)
-	return err == nil && back.Value == value, "vault"
+	return err == nil && back.Value == value, "vault", nil
 }
 
 // destHost is the host a credential would go to. "" for plain http, so credentials never travel unencrypted.

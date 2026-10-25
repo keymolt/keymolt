@@ -53,8 +53,9 @@ the PATH, tell the user which one runs.
 | Every recipe in a folder, and in each `.keymolt` folder below it | `keymolt rotate-all FOLDER`. For example, `keymolt rotate-all C:\P` rotates every project that keeps its recipes in a `.keymolt/` folder. |
 | Rotate on a schedule | Ask first, because this adds a task to the OS scheduler. Then run `keymolt schedule FOLDER monthly`. |
 
-Run `find` before `rotate`. After a rotation, the destination holds the new
-key, and `find` names that one.
+For a key made by hand, run `find` before `rotate`: after a rotation, the
+destination holds the new key, and `find` names that one. `find` needs a recipe
+with `current` and `find` steps, and most examples have neither.
 
 ## Write a recipe
 
@@ -72,24 +73,29 @@ README section "Writing a recipe" lists every field.
   and deployment names that you can't find in the project.
 - In `cmd` steps, call a published tool, such as `npx convex`. Don't write a
   script for a `cmd` step to run: approval covers the command line, not the
-  script's contents.
+  script's contents. The new key reaches the command on stdin; `{{new}}` on a
+  command line is refused. A `url` step sends `{{new}}` only over https.
+- Give each step exactly one of `url`, `cmd`, `browser` or `vault`.
 - Use credentials only as `{{cred:NAME}}`. If the credential doesn't exist yet,
   ask the user to run `keymolt cred-set NAME HOST`, where HOST is the API host,
   such as `api.openai.com`.
-- When the recipe is ready, ask the user to run `keymolt approve RECIPE` and to
-  check the list of destinations it prints.
+- When the recipe is ready, ask the user to run `keymolt approve RECIPE`, check
+  the list of destinations it prints, and answer `y`. For many recipes,
+  `keymolt approve FOLDER` lists every new or changed recipe and asks once.
 
 ## Read the receipt
 
-Every command prints one JSON line. On success, `ok` is `true`. On failure, the
-output is `{"ok":false,"error":"..."}` and the exit code is 1.
+`create`, `rotate`, `find`, `link`, `revoke`, `rotate-all` and `schedule` print
+one JSON line. On success, `ok` is `true`. On failure, the output is
+`{"ok":false,"error":"..."}` and the exit code is 1. The commands for the user,
+`cred-set`, `approve` and `browser login`, print plain text.
 
 | Field | Meaning |
 |---|---|
 | `new_id`, `length`, `sha256` | The new key's id, length and hash prefix |
 | `stored` | The `store` steps that now hold the new key |
 | `revoked` | Old keys that keymolt deleted |
-| `revoke_failed` | Old keys that are still live. The next `rotate` tries again. |
+| `revoke_failed` | Old keys that are still live. The next `rotate` tries again. With `keep_previous`, the key kept on purpose is listed here too. |
 | `revoke_by_hand` | A key keymolt can't delete for you. Tell the user. |
 | `found` | The id of a key made by hand that the destination held before. It is still live. |
 
@@ -100,4 +106,6 @@ output is `{"ok":false,"error":"..."}` and the exit code is 1.
 | `run ... in a real terminal`, or `keymolt doesn't track key` | Ask the user to run the quoted command in their own terminal |
 | `the destination already holds a key` | Use `find`, then the "made by hand" row above |
 | `keymolt already made a key for this recipe` | Use `rotate` instead of `create` |
+| `store #N failed (...), and it may hold the new key` | Both keys stay live. Fix the cause, then run `rotate` again. |
+| `new key ... could not be revoked` | keymolt still tracks it, and the next `rotate` revokes it |
 | `another keymolt run is using this folder` | Wait for the other run. If none is running, tell the user the lock file's path. |

@@ -25,6 +25,7 @@ import (
 
 func TestMain(m *testing.M) {
 	verifyWait = 10 * time.Millisecond
+	keyring.MockInit() // tests never touch the real OS vault
 	os.Exit(m.Run())
 }
 
@@ -42,6 +43,8 @@ func TestHelperProcess(t *testing.T) {
 	case "print": // stands in for a CLI that prints the key a destination holds, like `convex env get`
 		b, _ := os.ReadFile(args[1])
 		os.Stdout.Write(b)
+	case "env": // saves the environment it got, to check what reaches a command
+		_ = os.WriteFile(args[1], []byte(strings.Join(os.Environ(), "\n")), 0o600)
 	case "gen":
 		b := make([]byte, 16)
 		_, _ = rand.Read(b)
@@ -86,6 +89,7 @@ type fakeProvider struct {
 	n, adminN       int
 	revoked, stored []string
 	failVerify      bool
+	failRevoke      bool
 }
 
 func (f *fakeProvider) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -129,6 +133,10 @@ func (f *fakeProvider) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			reply(200, map[string]any{"id": kid, "api_key": map[string]any{"value": ""}})
 			return
 		}
+		if r.URL.Path == "/keys-badid" { // an id that would change the revoke URL's path
+			reply(200, map[string]any{"id": "../admin", "api_key": map[string]any{"value": "sk-live-SECRET-bad"}})
+			return
+		}
 		f.keys[kid] = "sk-live-SECRET-" + kid + "-xyz"
 		reply(200, map[string]any{"id": kid, "api_key": map[string]any{"value": f.keys[kid]}})
 	case "GET": // verify
@@ -147,9 +155,21 @@ func (f *fakeProvider) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		f.stored = append(f.stored, body.Value)
 		reply(200, map[string]any{"data": map[string]any{"ok": true}})
 	case "DELETE":
+		if f.failRevoke {
+			reply(500, nil)
+			return
+		}
 		f.revoked = append(f.revoked, filepath.Base(r.URL.Path))
 		reply(204, nil)
 	}
+}
+
+func readState(t *testing.T, dir string) map[string]stateEntry {
+	t.Helper()
+	var state map[string]stateEntry
+	b, _ := os.ReadFile(filepath.Join(dir, ".keymolt-state.json"))
+	_ = json.Unmarshal(b, &state)
+	return state
 }
 
 func mapValues(m map[string]string) []string {
@@ -308,6 +328,84 @@ func TestRotate(t *testing.T) {
 		}
 	})
 
+	t.Run("a first store that fails may still have landed: both keys stay live", func(t *testing.T) {
+		dir := t.TempDir() // its own folder, so state starts fresh
+		p := filepath.Join(dir, "first.json")
+		writeJSON(t, p, maps(recipe, "name", "fake_first"))
+		_, first, _ := cli(t, "SECRET", "rotate", p)
+		oldID := str(first["new_id"])
+		writeJSON(t, p, maps(recipe, "name", "fake_first", "store", []any{map[string]any{"label": "broken", "cmd": []any{"keymolt-no-such-command"}}}))
+		before := len(f.revoked)
+		code, out, _ := cli(t, "SECRET", "rotate", p)
+		e := readState(t, dir)["first.json"]
+		if code != 1 || !strings.Contains(str(out["error"]), "may hold the new key") || len(f.revoked) != before ||
+			e.ID == "" || e.ID == oldID || !slices.Equal(e.Stale, []string{oldID}) {
+			t.Fatal("a failed store must revoke nothing and track both keys:", out, e)
+		}
+	})
+
+	t.Run("a store that fails before sending anything revokes the new key", func(t *testing.T) {
+		dir := t.TempDir()
+		p := filepath.Join(dir, "unsent.json")
+		writeJSON(t, p, maps(recipe, "name", "fake_unsent"))
+		_, first, _ := cli(t, "SECRET", "rotate", p)
+		oldID := str(first["new_id"])
+		unsent := map[string]any{"label": "x", "method": "PUT", "url": base + "/store", "headers": map[string]any{"Authorization": "{{cred:nosuch}}"}}
+		writeJSON(t, p, maps(recipe, "name", "fake_unsent", "store", []any{unsent}))
+		before := len(f.revoked)
+		code, out, _ := cli(t, "SECRET", "rotate", p)
+		e := readState(t, dir)["unsent.json"]
+		if code != 1 || !strings.Contains(str(out["error"]), "new key revoked") || len(f.revoked) != before+1 || e.ID != oldID || len(e.Stale) != 0 {
+			t.Fatal("a store that sent nothing must revoke the new key and leave state as it was:", out, e)
+		}
+	})
+
+	t.Run("a new key keymolt can't revoke stays tracked, and the next run revokes it", func(t *testing.T) {
+		dir := t.TempDir()
+		p := filepath.Join(dir, "stuck.json")
+		writeJSON(t, p, maps(recipe, "name", "fake_stuck"))
+		_, first, _ := cli(t, "SECRET", "rotate", p)
+		oldID := str(first["new_id"])
+		f.failVerify, f.failRevoke = true, true
+		code, out, _ := cli(t, "SECRET", "rotate", p)
+		f.failVerify, f.failRevoke = false, false
+		e := readState(t, dir)["stuck.json"]
+		if code != 1 || !strings.Contains(str(out["error"]), "could not be revoked") || e.ID != oldID || len(e.Stale) != 1 {
+			t.Fatal("a new key whose revoke failed must stay in state:", out, e)
+		}
+		if code, out, _ = cli(t, "SECRET", "rotate", p); code != 0 || !slices.Contains(list(out["revoked"]), e.Stale[0]) {
+			t.Fatal("the next run must revoke it:", out)
+		}
+	})
+
+	t.Run("an id that could change a URL is refused, from the provider or the state file", func(t *testing.T) {
+		dir := t.TempDir()
+		p := filepath.Join(dir, "ids.json")
+		writeJSON(t, p, maps(recipe, "name", "fake_ids", "create", maps(asMap(recipe["create"]), "url", base+"/keys-badid")))
+		if code, out, _ := cli(t, "SECRET", "rotate", p); code != 1 || !strings.Contains(str(out["error"]), "can't put in a URL") {
+			t.Fatal("a provider id with path characters must be refused:", out)
+		}
+		writeJSON(t, p, maps(recipe, "name", "fake_ids"))
+		writeJSON(t, filepath.Join(dir, ".keymolt-state.json"), map[string]any{"ids.json": map[string]any{"id": "../admin", "stale": []any{}}})
+		before := len(f.revoked)
+		if code, out, _ := cli(t, "SECRET", "rotate", p); code != 1 || !strings.Contains(str(out["error"]), "not a key id") || len(f.revoked) != before {
+			t.Fatal("an edited state file must not put a path into a revoke URL:", out)
+		}
+	})
+
+	t.Run("commands don't get the credentials CI passes in", func(t *testing.T) {
+		dir := t.TempDir()
+		p, envOut := filepath.Join(dir, "env.json"), filepath.Join(dir, "env.txt")
+		writeJSON(t, p, maps(recipe, "name", "fake_env", "store", []any{map[string]any{"label": "env", "cmd": helper("env", envOut)}}))
+		if code, out, _ := cli(t, "SECRET", "rotate", p); code != 0 {
+			t.Fatal(out)
+		}
+		got, _ := os.ReadFile(envOut)
+		if os.Getenv("KEYMOLT_CRED_ADMIN") == "" || len(got) == 0 || strings.Contains(strings.ToUpper(string(got)), "KEYMOLT_CRED_") {
+			t.Fatal("a command must not see KEYMOLT_CRED_* variables")
+		}
+	})
+
 	t.Run("create makes the first key and refuses when one is tracked", func(t *testing.T) {
 		p := filepath.Join(t.TempDir(), "new.json") // its own folder, so state starts fresh
 		writeJSON(t, p, maps(recipe, "name", "fake_create"))
@@ -446,18 +544,21 @@ func maps(m map[string]any, kv ...any) map[string]any {
 
 func TestSchedulePlan(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "Weekly Keys")
-	name, files, cmds := schedulePlan(dir, "weekly", "windows", `C:\tools\keymolt.exe`, `C:\Users\me`)
+	name, files, cmds := schedulePlan(dir, "weekly", "windows", `C:\tools\keymolt.exe`, `C:\Users\me`, "")
 	if !strings.HasPrefix(name, "keymolt-") || !strings.HasSuffix(name, "-weekly-keys") || files != nil ||
 		!strings.Contains(cmds[0][3], "-StartWhenAvailable") || !strings.Contains(cmds[0][3], `'"rotate-all" "`) {
 		t.Fatal("windows plan:", name, cmds)
 	}
-	a, _, _ := schedulePlan(filepath.Join(dir, "app-one", ".keymolt"), "weekly", "windows", "keymolt.exe", "")
-	b, _, _ := schedulePlan(filepath.Join(dir, "app-two", ".keymolt"), "weekly", "windows", "keymolt.exe", "")
+	a, _, _ := schedulePlan(filepath.Join(dir, "app-one", ".keymolt"), "weekly", "windows", "keymolt.exe", "", "")
+	b, _, _ := schedulePlan(filepath.Join(dir, "app-two", ".keymolt"), "weekly", "windows", "keymolt.exe", "", "")
 	if a == b {
 		t.Fatal("each project's .keymolt folder must get its own job:", a)
 	}
-	_, files, cmds = schedulePlan(dir, "monthly", "darwin", "/usr/local/bin/keymolt", "/Users/me")
+	_, files, cmds = schedulePlan(dir, "monthly", "darwin", "/usr/local/bin/keymolt", "/Users/me", "/opt/homebrew/bin:/usr/bin")
 	for _, plist := range files {
+		if !strings.Contains(plist, "<key>PATH</key><string>/opt/homebrew/bin:/usr/bin</string>") {
+			t.Fatal("launchd jobs must get the PATH schedule ran with:", plist)
+		}
 		if !strings.Contains(plist, "<key>Day</key><integer>1</integer>") {
 			t.Fatal("monthly plist should run on day 1")
 		}
@@ -472,11 +573,12 @@ func TestSchedulePlan(t *testing.T) {
 	if cmds[1][1] != "load" {
 		t.Fatal("darwin plan:", cmds)
 	}
-	name, files, cmds = schedulePlan(dir, "weekly", "linux", "/opt/key%molt", "/home/me")
+	name, files, cmds = schedulePlan(dir, "weekly", "linux", "/opt/key%molt", "/home/me", "/home/me/.nvm/bin:/usr/bin")
 	timer := files[filepath.Join("/home/me", ".config", "systemd", "user", name)+".timer"]
 	service := files[filepath.Join("/home/me", ".config", "systemd", "user", name)+".service"]
 	if !strings.Contains(timer, "OnCalendar=Sun *-*-* 03:00") || !strings.Contains(timer, "Persistent=true") ||
-		!strings.Contains(service, `"/opt/key%%molt"`) || cmds[1][4] != name+".timer" {
+		!strings.Contains(service, `"/opt/key%%molt"`) || cmds[1][4] != name+".timer" ||
+		!strings.Contains(service, `Environment="PATH=/home/me/.nvm/bin:/usr/bin"`) {
 		t.Fatal("linux plan:", files, cmds)
 	}
 }
@@ -512,7 +614,7 @@ func TestApproval(t *testing.T) {
 	if _, err := rotate(path); err == nil || !strings.Contains(err.Error(), "not approved") {
 		t.Fatal("rotate must refuse an unapproved recipe:", err)
 	}
-	h, _ := recipeHash(path)
+	_, h, _ := readRecipe(path)
 	b, _ := os.ReadFile(path)
 	if sum := sha256.Sum256(b); h != hex.EncodeToString(sum[:]) {
 		t.Fatal("a recipe with no flows must keep the plain file hash, so `sha256sum` and old approvals still work")
@@ -526,14 +628,13 @@ func TestApproval(t *testing.T) {
 	dir := filepath.Dir(path)
 	fpath, flowed := filepath.Join(dir, "store.flow.json"), filepath.Join(dir, "flowed.json")
 	writeJSON(t, fpath, map[string]any{"steps": []any{map[string]any{"goto": "https://dash.example.com/keys"}}})
-	fr := map[string]any{"name": "f", "create": map[string]any{"cmd": []any{"gen", "--name", "{{ts}}"}},
-		"store": []any{map[string]any{"browser": "store.flow.json", "vars": map[string]any{"key": "{{new}}"}}}}
-	writeJSON(t, flowed, fr)
-	if d := strings.Join(recipeDestinations(fr, dir), "\n"); !strings.Contains(d, "runs gen --name {{ts}}") ||
-		!strings.Contains(d, "opens https://dash.example.com/keys") {
-		t.Fatal("approve must show the whole command and the pages a flow opens:", d)
+	writeJSON(t, flowed, map[string]any{"name": "f", "create": map[string]any{"cmd": []any{"gen", "--name", "{{ts}}"}},
+		"store": []any{map[string]any{"browser": "store.flow.json", "vars": map[string]any{"key": "{{new}}"}}}})
+	fr, fh, err := readRecipe(flowed)
+	if d := strings.Join(recipeDestinations(fr), "\n"); err != nil || !strings.Contains(d, "runs gen --name {{ts}}") ||
+		!strings.Contains(d, "starts at https://dash.example.com/keys") {
+		t.Fatal("approve must show the whole command and where a flow starts:", d, err)
 	}
-	fh, _ := recipeHash(flowed)
 	t.Setenv("KEYMOLT_APPROVED", fh)
 	if !isApproved(flowed) {
 		t.Fatal("a recipe with a flow must be approvable")
@@ -542,25 +643,95 @@ func TestApproval(t *testing.T) {
 	if isApproved(flowed) {
 		t.Fatal("a changed flow must remove approval")
 	}
+	if step := asMap(asList(fr["store"])[0]); str(asList(asMap(step[loadedFlow])["steps"])[0].(map[string]any)["goto"]) != "https://dash.example.com/keys" {
+		t.Fatal("a run must use the flow it read with the recipe, not the file as it is later")
+	}
 	os.Remove(fpath)
-	if _, err := recipeHash(flowed); err == nil || isApproved(flowed) {
+	if _, _, err := readRecipe(flowed); err == nil || isApproved(flowed) {
 		t.Fatal("a missing flow must not be approved")
+	}
+	if _, _, _, err := call(map[string]any{"browser": "store.flow.json"}, nil, dir); err == nil || !strings.Contains(err.Error(), "not loaded") {
+		t.Fatal("a browser step must run only a flow readRecipe loaded:", err)
 	}
 	t.Setenv("KEYMOLT_APPROVED", "")
 
-	vaultAvailable(t)
-	if err := approveRecipeFile(path); err != nil {
-		t.Fatal(err)
+	// the vault keeps approvals; approve asks first, and an edit removes approval
+	setTerminal(t, true)
+	answer := func(s string) { stdin = strings.NewReader(s); t.Cleanup(func() { stdin = os.Stdin }) }
+	var out bytes.Buffer
+	answer("n\n")
+	if err := approveCommand(path, &out); err == nil || isApproved(path) || !strings.Contains(out.String(), "store #0 -> https://api.example.com") {
+		t.Fatal("approve must show the destinations, and save nothing unless the person says yes:", err, out.String())
 	}
-	defer keyring.Delete(vaultService, "approval:"+h)
-	if !isApproved(path) {
-		t.Fatal("approval did not take")
+	answer("y\n")
+	if err := approveCommand(path, &out); err != nil || !isApproved(path) {
+		t.Fatal("approval did not take:", err)
 	}
 	if err := os.WriteFile(path, []byte(" "), 0o600); err != nil { // editing the file revokes approval
 		t.Fatal(err)
 	}
 	if isApproved(path) {
 		t.Fatal("an edited recipe must lose approval")
+	}
+}
+
+func TestApproveFolder(t *testing.T) {
+	setTerminal(t, true)
+	root := t.TempDir()
+	r := func(n string) map[string]any {
+		return map[string]any{"name": n, "create": map[string]any{"url": "https://api.example.com/" + n},
+			"store": []any{map[string]any{"url": "https://api.example.com/store"}}}
+	}
+	a, b := filepath.Join(root, "a.json"), filepath.Join(root, "app", ".keymolt", "b.json")
+	_ = os.MkdirAll(filepath.Dir(b), 0o755)
+	writeJSON(t, a, r("a"))
+	writeJSON(t, b, r("b"))
+	writeJSON(t, filepath.Join(root, "bad.json"), map[string]any{"name": "bad", "create": map[string]any{"url": "https://x", "cmd": []any{"x"}},
+		"store": []any{map[string]any{"url": "https://x"}}})
+	stdin = strings.NewReader("y\n")
+	t.Cleanup(func() { stdin = os.Stdin })
+	var out bytes.Buffer
+	if err := approveCommand(root, &out); err != nil || !isApproved(a) || !isApproved(b) ||
+		!strings.Contains(out.String(), "Approve 2 recipe(s)?") || !strings.Contains(out.String(), "skipping") {
+		t.Fatal("approve FOLDER must list and approve every good recipe at once, and skip a bad one:", err, out.String())
+	}
+	writeJSON(t, a, r("a2"))
+	out.Reset()
+	stdin = strings.NewReader("y\n")
+	if err := approveCommand(root, &out); err != nil || strings.Contains(out.String(), "b.json") || !strings.Contains(out.String(), "Approve 1 recipe(s)?") {
+		t.Fatal("approve FOLDER must list only new or changed recipes:", err, out.String())
+	}
+}
+
+func TestStepChecks(t *testing.T) {
+	for want, step := range map[string]map[string]any{
+		"exactly one":          {"url": "https://api.example.com", "cmd": []any{"sh"}}, // approve would show the url, the engine ran the cmd
+		"command line":         {"cmd": []any{"tool", "--key={{new}}"}},
+		"only goes over https": {"url": "http://api.example.com/{{new}}"},
+	} {
+		recipe := map[string]any{"name": "x", "create": map[string]any{"url": "https://api.example.com"}, "store": []any{step}}
+		if err := checkSteps(recipe); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%v must be refused with %q: %v", step, want, err)
+		}
+	}
+	// every shipped example passes
+	examples, _ := filepath.Glob("*.example.json")
+	for _, p := range examples {
+		if _, _, err := readRecipe(p); err != nil {
+			t.Error(p, err)
+		}
+	}
+	// the hash formula never changes by accident: a changed hash would undo every approval out there
+	dir := t.TempDir()
+	plain, flowed, flow := filepath.Join(dir, "p.json"), filepath.Join(dir, "f.json"), filepath.Join(dir, "x.flow.json")
+	_ = os.WriteFile(plain, []byte(`{"name":"p","create":{"url":"https://a"},"store":[{"url":"https://b"}]}`), 0o600)
+	_ = os.WriteFile(flowed, []byte(`{"name":"f","create":{"browser":"x.flow.json"},"store":[{"url":"https://b"}]}`), 0o600)
+	_ = os.WriteFile(flow, []byte(`{"steps":[]}`), 0o600)
+	_, hp, _ := readRecipe(plain)
+	_, hf, _ := readRecipe(flowed)
+	if hp != "f90ddd987bb4e4ccab8dac2e3ebaec47dbce5101ac0dcf3da1c3994421be0e04" ||
+		hf != "742b3ba527bf9abaa0b7c0e4bc3be9c458e602c7a079b55d61f7403bc41f75df" {
+		t.Fatal("recipe hashes changed:", hp, hf)
 	}
 }
 
@@ -590,5 +761,10 @@ func TestRedirectBlocked(t *testing.T) {
 	ok, _, _ := httpDo(map[string]any{"method": "POST", "url": front.URL + "/keys", "body": map[string]any{"k": "secret"}})
 	if ok || atomic.LoadInt32(&hits) != 0 {
 		t.Fatal("a redirect to another host must be refused")
+	}
+	from, _ := http.NewRequest("POST", "https://api.example.com/keys", nil)
+	to, _ := http.NewRequest("POST", "http://api.example.com/keys", nil)
+	if httpClient.CheckRedirect(to, []*http.Request{from}) == nil {
+		t.Fatal("a redirect from https to http must be refused, even on the same host")
 	}
 }

@@ -21,9 +21,9 @@ import (
 
 var (
 	// Go drops the Authorization header on a cross-host redirect, but it resends the body on a 307/308,
-	// and the body can hold a key. So refuse any redirect to another host.
+	// and the body can hold a key. So refuse any redirect to another host, or from https down to http.
 	httpClient = &http.Client{Timeout: 30 * time.Second, CheckRedirect: func(req *http.Request, via []*http.Request) error {
-		if req.URL.Host != via[0].URL.Host {
+		if req.URL.Host != via[0].URL.Host || req.URL.Scheme != via[0].URL.Scheme {
 			return errors.New("refusing redirect to another host")
 		}
 		if len(via) >= 10 {
@@ -34,28 +34,69 @@ var (
 	verifyWait = 2 * time.Second // new keys can take a few seconds to become valid
 )
 
+// loadedFlow is where readRecipe puts a browser step's parsed flow, so a run uses the flow bytes approval hashed.
+const loadedFlow = "\x00flow"
+
+// stepKind says what a step does. call and recipeDestinations both use it, so approve shows what really runs.
+func stepKind(step map[string]any) (string, error) {
+	var kinds []string
+	for _, k := range []string{"url", "cmd", "browser", "vault"} {
+		if step[k] != nil {
+			kinds = append(kinds, k)
+		}
+	}
+	if len(kinds) != 1 {
+		return "", fmt.Errorf("a step needs exactly one of url, cmd, browser or vault, not %d", len(kinds))
+	}
+	return kinds[0], nil
+}
+
+// checkSteps refuses steps that approve would show wrongly, or that would leak the new key on the way.
+func checkSteps(recipe map[string]any) error {
+	var errs []error
+	eachStep(recipe, func(label string, step map[string]any) {
+		if step == nil { // a missing create or store is reported by the command that needs it
+			return
+		}
+		kind, err := stepKind(step)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("%s: %v", label, err))
+			return
+		}
+		b, _ := json.Marshal(step)
+		switch {
+		case kind == "cmd" && strings.Contains(string(b), "{{new}}"):
+			errs = append(errs, fmt.Errorf("%s: {{new}} can't go into a command line, which other programs can read; the command gets the key on stdin", label))
+		case kind == "url" && strings.Contains(string(b), "{{new}}") && destHost(str(step["url"])) == "":
+			errs = append(errs, fmt.Errorf("%s: the new key only goes over https", label))
+		}
+	})
+	return errors.Join(errs...)
+}
+
 // recipeDestinations lists, in plain words, every place a recipe sends keys. Used by `keymolt approve`.
-func recipeDestinations(recipe map[string]any, dir string) []string {
+func recipeDestinations(recipe map[string]any) []string {
 	var out []string
 	eachStep(recipe, func(label string, step map[string]any) {
-		switch {
-		case step["url"] != nil:
+		kind, _ := stepKind(step)
+		switch kind {
+		case "url":
 			out = append(out, label+" -> "+str(step["url"]))
-		case step["cmd"] != nil:
-			if c := toStrings(step["cmd"]); len(c) > 0 {
-				out = append(out, label+" -> runs "+strings.Join(c, " "))
-			}
-		case step["browser"] != nil:
+		case "cmd":
+			out = append(out, label+" -> runs "+strings.Join(toStrings(step["cmd"]), " "))
+		case "browser":
+			line := label + " -> browser flow " + str(step["browser"])
 			var sites []string
-			if flow, err := readJSONFile(flowPath(step, dir)); err == nil {
-				for _, s := range asList(flow["steps"]) {
-					if u := asMap(s)["goto"]; u != nil {
-						sites = append(sites, str(u))
-					}
+			for _, s := range asList(asMap(step[loadedFlow])["steps"]) {
+				if u := asMap(s)["goto"]; u != nil {
+					sites = append(sites, str(u))
 				}
 			}
-			out = append(out, label+" -> browser flow "+str(step["browser"])+", opens "+strings.Join(sites, ", "))
-		case step["vault"] != nil:
+			if len(sites) > 0 { // only the goto steps: a click can still lead somewhere else
+				line += ", starts at " + strings.Join(sites, ", ")
+			}
+			out = append(out, line)
+		case "vault":
 			out = append(out, label+" -> keymolt vault ("+str(step["vault"])+")")
 		}
 	})
@@ -169,20 +210,30 @@ func pick(data any, path string) (any, error) {
 // such as a credential sent to the wrong host. dir is the recipe's folder, for relative browser flow paths.
 func call(step map[string]any, ctx map[string]string, dir string) (ok bool, data any, detail string, err error) {
 	var raw []byte
-	switch {
-	case step["vault"] != nil:
-		ok, detail = vaultReplace(str(step["vault"]), ctx["new"])
-	case step["browser"] != nil:
+	kind, err := stepKind(step)
+	if err != nil {
+		return false, nil, "", err
+	}
+	switch kind {
+	case "vault":
+		if ok, detail, err = vaultReplace(str(step["vault"]), ctx["new"]); err != nil {
+			return false, nil, "", err
+		}
+	case "browser":
 		vars, err := render(step["vars"], ctx, "") // flow vars can't carry credentials
 		if err != nil {
 			return false, nil, "", err
 		}
-		raw, err = runFlow(flowPath(step, dir), toStrMap(vars))
+		flow := asMap(step[loadedFlow])
+		if flow == nil {
+			return false, nil, "", errors.New("browser flow not loaded") // only readRecipe loads flows, after hashing them
+		}
+		raw, err = runFlow(flow, toStrMap(vars))
 		ok, detail = err == nil, "browser"
 		if err != nil {
 			detail = "browser: " + err.Error()
 		}
-	case step["cmd"] != nil:
+	case "cmd":
 		s, err := render(step["cmd"], ctx, "") // credentials can't go into a command line at all
 		if err != nil {
 			return false, nil, "", err
@@ -194,6 +245,7 @@ func call(step map[string]any, ctx map[string]string, dir string) (ok bool, data
 		cmd := exec.Command(argv[0], argv[1:]...)
 		// like browser flows: a recipe works the same from any folder, and from a scheduler
 		cmd.Dir = dir
+		cmd.Env = childEnv()
 		cmd.Stdin = strings.NewReader(ctx["new"]) // the new key goes over stdin, never into argv
 		var out bytes.Buffer
 		cmd.Stdout = &out
@@ -202,7 +254,7 @@ func call(step map[string]any, ctx map[string]string, dir string) (ok bool, data
 		if cmd.ProcessState == nil {
 			detail = "command not found"
 		}
-	case step["url"] != nil:
+	case "url":
 		u, err := renderString(str(step["url"]), ctx, "")
 		if err != nil {
 			return false, nil, "", err
@@ -212,8 +264,6 @@ func call(step map[string]any, ctx map[string]string, dir string) (ok bool, data
 			return false, nil, "", err
 		}
 		ok, raw, detail = httpDo(asMap(r))
-	default:
-		return false, nil, "", errors.New("step has no url, cmd, browser or vault")
 	}
 	data = decode(raw)
 	if s := strings.TrimSpace(string(raw)); data == nil && s != "" { // plain text, such as a CLI printing a key
@@ -298,7 +348,7 @@ func rotate(recipePath string) (*receipt, error) { return runRecipe(recipePath, 
 // runRecipe makes a new key and stores it, then revokes the old one. createOnly refuses to run when the
 // folder's state already records a key for this recipe. It can't see keys set by hand or tracked in another folder.
 func runRecipe(recipePath string, createOnly bool) (*receipt, error) {
-	recipe, err := readJSONFile(recipePath)
+	recipe, err := loadApproved(recipePath)
 	if err != nil {
 		return nil, err
 	}
@@ -313,9 +363,6 @@ func runRecipe(recipePath string, createOnly bool) (*receipt, error) {
 		return nil, errors.New("recipe has no store step; the new key would have nowhere to go")
 	}
 	if err := checkFind(recipe); err != nil {
-		return nil, err
-	}
-	if err := checkApproved(recipePath); err != nil {
 		return nil, err
 	}
 	fs, err := openState(recipePath)
@@ -373,6 +420,16 @@ func runRecipe(recipePath string, createOnly bool) (*receipt, error) {
 	}
 	ctx["new"], ctx["new_id"] = str(newValue), str(newID)
 	addSecret(ctx["new"])
+	if ctx["new_id"] != "" && !keyID.MatchString(ctx["new_id"]) {
+		return nil, fmt.Errorf("create returned an id keymolt can't put in a URL safely; check the provider for an orphaned key")
+	}
+	// track the new key before anything else can fail, so a crash or a failed cleanup never leaves it live and unknown
+	if ctx["new_id"] != "" {
+		state[stateKey] = stateEntry{entry.ID, append(slices.Clone(entry.Stale), ctx["new_id"]), entry.Found}
+		if err := saveState(); err != nil {
+			return nil, fmt.Errorf("create worked but state save failed (%v); check the provider for an orphaned key", err)
+		}
+	}
 	sum := sha256.Sum256([]byte(ctx["new"]))
 	out := &receipt{Name: name, NewID: ctx["new_id"], Length: len(ctx["new"]), SHA256: hex.EncodeToString(sum[:])[:12],
 		Stored: []string{}, Revoked: []string{}, RevokeFailed: []string{}}
@@ -405,9 +462,18 @@ func runRecipe(recipePath string, createOnly bool) (*receipt, error) {
 		return ok && err == nil
 	}
 
+	// discard revokes the new key after a failed run. If that fails, the key stays in state, so the next run retries.
+	discard := func(why string) error {
+		if !revoke(ctx["new_id"]) {
+			return fmt.Errorf("%s; new key %s could not be revoked, the next rotate retries; old key untouched", why, ctx["new_id"])
+		}
+		state[stateKey] = entry
+		_ = saveState() // best effort: worst case is a later run retries a delete that already happened
+		return fmt.Errorf("%s; new key revoked, old key untouched", why)
+	}
+
 	if ctx["new"] == "" { // a provider that returns an empty key would otherwise get stored over the live one
-		revoke(ctx["new_id"])
-		return nil, errors.New("create returned an empty key; new key revoked, old key untouched")
+		return nil, discard("create returned an empty key")
 	}
 
 	if v := asMap(recipe["verify"]); v != nil {
@@ -417,12 +483,11 @@ func runRecipe(recipePath string, createOnly bool) (*receipt, error) {
 			}
 			time.Sleep(verifyWait)
 		}
-		if err != nil || !ok {
-			revoke(ctx["new_id"])
-			if err != nil {
-				return nil, err
-			}
-			return nil, fmt.Errorf("new key failed verify (%s); new key revoked, old key untouched", out.Verify)
+		if err != nil {
+			return nil, discard(err.Error())
+		}
+		if !ok {
+			return nil, discard(fmt.Sprintf("new key failed verify (%s)", out.Verify))
 		}
 	}
 
@@ -435,20 +500,20 @@ func runRecipe(recipePath string, createOnly bool) (*receipt, error) {
 	for i, d := range asList(recipe["store"]) {
 		dest := asMap(d)
 		ok, _, detail, err := call(dest, ctx, dir)
+		if err != nil && len(out.Stored) == 0 { // failed before sending anything, so no destination uses the new key
+			return nil, discard(fmt.Sprintf("store #%d failed (%v)", i, err))
+		}
 		if err != nil {
 			ok, detail = false, err.Error()
 		}
 		if !ok {
-			if len(out.Stored) == 0 { // nothing uses the new key yet, so remove it
-				revoke(ctx["new_id"])
-				return nil, fmt.Errorf("store #%d failed (%s); new key revoked, old key untouched", i, detail)
-			}
-			// some destinations now hold the new key: keep every key live, revoke the old ones next run
+			// the store may have landed even though it failed, such as a timeout after the write, and other
+			// destinations may hold the new key already: keep every key live, and revoke the old ones next run
 			state[stateKey] = track(oldLive)
 			if e := saveState(); e != nil {
 				return nil, fmt.Errorf("store #%d failed and state save failed (%v); keys may be untracked, check the provider", i, e)
 			}
-			return nil, fmt.Errorf("store #%d failed (%s) after storing to %v; old and new keys both live, rerun", i, detail, out.Stored)
+			return nil, fmt.Errorf("store #%d failed (%s), and it may hold the new key; old and new keys both live, rerun", i, detail)
 		}
 		label := str(dest["label"])
 		if label == "" {
@@ -491,13 +556,6 @@ func checkFind(recipe map[string]any) error {
 	return nil
 }
 
-func checkApproved(recipePath string) error {
-	if !isApproved(recipePath) {
-		return fmt.Errorf("recipe not approved: run `keymolt approve %s` in a terminal first", recipePath)
-	}
-	return nil
-}
-
 // folderState is the state file in a recipe's folder, locked while one command uses it.
 type folderState struct {
 	dir, path string
@@ -519,6 +577,14 @@ func openState(recipePath string) (*folderState, error) {
 		if err := json.Unmarshal(b, &fs.state); err != nil {
 			unlock()
 			return nil, errors.New(".keymolt-state.json is unreadable")
+		}
+	}
+	for _, e := range fs.state { // ids go into URLs and commands, and the file may have been edited
+		for _, id := range append(append([]string{e.ID}, e.Stale...), e.Found...) {
+			if id != "" && !keyID.MatchString(id) {
+				unlock()
+				return nil, fmt.Errorf("%s holds %q, which is not a key id; fix or delete it", fs.path, id)
+			}
 		}
 	}
 	return fs, nil
@@ -620,12 +686,8 @@ func lockDir(dir string) (func(), error) {
 	return func() { os.Remove(p) }, nil
 }
 
-// rotateAll rotates each recipe in folder, and in every .keymolt folder below it, so one run covers many projects.
-// Each of those folders gets a log of one receipt line per recipe. Receipts hold no secrets.
-func rotateAll(folder string, w io.Writer) error {
-	if st, err := os.Stat(folder); err != nil || !st.IsDir() {
-		return fmt.Errorf("%s is not a folder", folder)
-	}
+// findRecipes returns the recipes in folder, and in every .keymolt folder below it, one list per folder.
+func findRecipes(folder string) [][]string {
 	dirs := []string{folder}
 	_ = filepath.WalkDir(folder, func(p string, d os.DirEntry, err error) error {
 		switch {
@@ -638,7 +700,7 @@ func rotateAll(folder string, w io.Writer) error {
 		}
 		return nil
 	})
-	failed, logs := 0, []string{}
+	var out [][]string
 	for _, dir := range dirs {
 		paths, _ := filepath.Glob(filepath.Join(dir, "*.json"))
 		paths = slices.DeleteFunc(paths, func(p string) bool {
@@ -648,10 +710,22 @@ func rotateAll(folder string, w io.Writer) error {
 			m, err := readJSONFile(p)
 			return err == nil && m["create"] == nil // browser flows and other JSON; a broken recipe still runs and fails
 		})
-		if len(paths) == 0 {
-			continue
+		if len(paths) > 0 {
+			out = append(out, paths)
 		}
-		logPath := filepath.Join(dir, "keymolt.log")
+	}
+	return out
+}
+
+// rotateAll rotates each recipe findRecipes finds, so one run covers many projects. Each folder that holds recipes
+// gets a log of one receipt line per recipe. Receipts hold no secrets.
+func rotateAll(folder string, w io.Writer) error {
+	if st, err := os.Stat(folder); err != nil || !st.IsDir() {
+		return fmt.Errorf("%s is not a folder", folder)
+	}
+	failed, logs := 0, []string{}
+	for _, paths := range findRecipes(folder) {
+		logPath := filepath.Join(filepath.Dir(paths[0]), "keymolt.log")
 		logf, err := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 		if err != nil {
 			return err

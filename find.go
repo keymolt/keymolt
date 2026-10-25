@@ -16,7 +16,7 @@ var keyID = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.:-]*$`)
 
 // findCommand returns the id of the key the recipe's destination holds now.
 func findCommand(recipePath string) (string, error) {
-	recipe, err := readJSONFile(recipePath)
+	recipe, err := loadApproved(recipePath)
 	if err != nil {
 		return "", err
 	}
@@ -24,9 +24,6 @@ func findCommand(recipePath string) (string, error) {
 		return "", errors.New(`recipe has no "find" step`)
 	}
 	if err := checkFind(recipe); err != nil {
-		return "", err
-	}
-	if err := checkApproved(recipePath); err != nil {
 		return "", err
 	}
 	abs, _ := filepath.Abs(recipePath)
@@ -78,11 +75,8 @@ func revokeCommand(recipePath, id string) (note string, err error) {
 	if !keyID.MatchString(id) {
 		return "", fmt.Errorf("%q is not a key id", id)
 	}
-	recipe, err := readJSONFile(recipePath)
+	recipe, err := loadApproved(recipePath)
 	if err != nil {
-		return "", err
-	}
-	if err := checkApproved(recipePath); err != nil {
 		return "", err
 	}
 	fs, err := openState(recipePath)
