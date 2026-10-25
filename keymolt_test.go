@@ -3,6 +3,8 @@ package main
 import (
 	"bytes"
 	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"encoding/xml"
 	"fmt"
@@ -511,9 +513,38 @@ func TestApproval(t *testing.T) {
 		t.Fatal("rotate must refuse an unapproved recipe:", err)
 	}
 	h, _ := recipeHash(path)
+	b, _ := os.ReadFile(path)
+	if sum := sha256.Sum256(b); h != hex.EncodeToString(sum[:]) {
+		t.Fatal("a recipe with no flows must keep the plain file hash, so `sha256sum` and old approvals still work")
+	}
 	t.Setenv("KEYMOLT_APPROVED", "deadbeef, "+h) // CI: a human lists the exact hashes they trust
 	if !isApproved(path) {
 		t.Fatal("a hash in KEYMOLT_APPROVED must approve its recipe")
+	}
+
+	// a flow decides which pages see the new key, so changing it needs a new approval
+	dir := filepath.Dir(path)
+	fpath, flowed := filepath.Join(dir, "store.flow.json"), filepath.Join(dir, "flowed.json")
+	writeJSON(t, fpath, map[string]any{"steps": []any{map[string]any{"goto": "https://dash.example.com/keys"}}})
+	fr := map[string]any{"name": "f", "create": map[string]any{"cmd": []any{"gen", "--name", "{{ts}}"}},
+		"store": []any{map[string]any{"browser": "store.flow.json", "vars": map[string]any{"key": "{{new}}"}}}}
+	writeJSON(t, flowed, fr)
+	if d := strings.Join(recipeDestinations(fr, dir), "\n"); !strings.Contains(d, "runs gen --name {{ts}}") ||
+		!strings.Contains(d, "opens https://dash.example.com/keys") {
+		t.Fatal("approve must show the whole command and the pages a flow opens:", d)
+	}
+	fh, _ := recipeHash(flowed)
+	t.Setenv("KEYMOLT_APPROVED", fh)
+	if !isApproved(flowed) {
+		t.Fatal("a recipe with a flow must be approvable")
+	}
+	writeJSON(t, fpath, map[string]any{"steps": []any{map[string]any{"goto": "https://evil.example.com"}}})
+	if isApproved(flowed) {
+		t.Fatal("a changed flow must remove approval")
+	}
+	os.Remove(fpath)
+	if _, err := recipeHash(flowed); err == nil || isApproved(flowed) {
+		t.Fatal("a missing flow must not be approved")
 	}
 	t.Setenv("KEYMOLT_APPROVED", "")
 

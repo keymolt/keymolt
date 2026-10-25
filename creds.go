@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/url"
 	"os"
+	"path/filepath"
 	"slices"
 	"sort"
 	"strings"
@@ -109,13 +110,35 @@ func credSetPrompt(name string, hosts []string, w io.Writer) error {
 // A recipe says where keys go. A prompt-injected agent could add an exfiltration destination.
 // So a human approves a recipe once, by its exact bytes. Editing the file revokes approval.
 
+// recipeHash is the SHA-256 of the recipe file. With browser flows, it also covers each flow file, since a flow
+// decides which pages see the new key.
 func recipeHash(path string) (string, error) {
 	b, err := os.ReadFile(path)
 	if err != nil {
 		return "", err
 	}
 	sum := sha256.Sum256(b)
-	return hex.EncodeToString(sum[:]), nil
+	var flows [][32]byte
+	recipe, _ := decode(b).(map[string]any)
+	eachStep(recipe, func(_ string, step map[string]any) {
+		if step["browser"] != nil && err == nil {
+			var fb []byte
+			fb, err = os.ReadFile(flowPath(step, filepath.Dir(path)))
+			flows = append(flows, sha256.Sum256(fb))
+		}
+	})
+	if err != nil {
+		return "", err
+	}
+	if len(flows) == 0 { // the plain file hash, so `sha256sum recipe.json` gives it too
+		return hex.EncodeToString(sum[:]), nil
+	}
+	h := sha256.New()
+	h.Write(sum[:])
+	for _, f := range flows {
+		h.Write(f[:])
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
 func approveRecipeFile(path string) error {
@@ -157,7 +180,7 @@ func approveCommand(path string, w io.Writer) error {
 		return err
 	}
 	fmt.Fprintf(w, "Recipe %s sends keys to:\n", path)
-	for _, d := range recipeDestinations(recipe) {
+	for _, d := range recipeDestinations(recipe, filepath.Dir(path)) {
 		fmt.Fprintf(w, "  %s\n", d)
 	}
 	if err := approveRecipeFile(path); err != nil {

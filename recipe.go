@@ -35,22 +35,35 @@ var (
 )
 
 // recipeDestinations lists, in plain words, every place a recipe sends keys. Used by `keymolt approve`.
-func recipeDestinations(recipe map[string]any) []string {
+func recipeDestinations(recipe map[string]any, dir string) []string {
 	var out []string
-	add := func(label string, step map[string]any) {
+	eachStep(recipe, func(label string, step map[string]any) {
 		switch {
 		case step["url"] != nil:
 			out = append(out, label+" -> "+str(step["url"]))
 		case step["cmd"] != nil:
-			if c := asList(step["cmd"]); len(c) > 0 {
-				out = append(out, label+" -> runs "+str(c[0]))
+			if c := toStrings(step["cmd"]); len(c) > 0 {
+				out = append(out, label+" -> runs "+strings.Join(c, " "))
 			}
 		case step["browser"] != nil:
-			out = append(out, label+" -> browser flow "+str(step["browser"]))
+			var sites []string
+			if flow, err := readJSONFile(flowPath(step, dir)); err == nil {
+				for _, s := range asList(flow["steps"]) {
+					if u := asMap(s)["goto"]; u != nil {
+						sites = append(sites, str(u))
+					}
+				}
+			}
+			out = append(out, label+" -> browser flow "+str(step["browser"])+", opens "+strings.Join(sites, ", "))
 		case step["vault"] != nil:
 			out = append(out, label+" -> keymolt vault ("+str(step["vault"])+")")
 		}
-	}
+	})
+	return out
+}
+
+// eachStep calls add for every step of a recipe, always in the same order.
+func eachStep(recipe map[string]any, add func(label string, step map[string]any)) {
 	if c := asMap(recipe["current"]); c != nil {
 		add("current", c)
 	}
@@ -70,7 +83,15 @@ func recipeDestinations(recipe map[string]any) []string {
 	if r := asMap(recipe["revoke"]); r != nil {
 		add("revoke", r)
 	}
-	return out
+}
+
+// flowPath is where a browser step's flow file is: relative paths start at the recipe's folder.
+func flowPath(step map[string]any, dir string) string {
+	flow := str(step["browser"])
+	if filepath.IsAbs(flow) {
+		return flow
+	}
+	return filepath.Join(dir, flow)
 }
 
 // render fills placeholders. {{cred:X}} only resolves when host is one of X's hosts; host "" means nowhere.
@@ -156,11 +177,7 @@ func call(step map[string]any, ctx map[string]string, dir string) (ok bool, data
 		if err != nil {
 			return false, nil, "", err
 		}
-		flow := str(step["browser"])
-		if !filepath.IsAbs(flow) {
-			flow = filepath.Join(dir, flow)
-		}
-		raw, err = runFlow(flow, toStrMap(vars))
+		raw, err = runFlow(flowPath(step, dir), toStrMap(vars))
 		ok, detail = err == nil, "browser"
 		if err != nil {
 			detail = "browser: " + err.Error()

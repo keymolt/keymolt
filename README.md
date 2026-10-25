@@ -29,8 +29,8 @@ The human keeps the power to see secrets and to decide where they may go.
   of hosts, and only over HTTPS. A recipe that tries to send a key anywhere else
   fails.
 - **A recipe can only run after a human approves it.** `approve` prints every
-  destination the recipe sends keys to, then records the file's hash. Edit the
-  file and approval is gone. `approve` only runs in a real terminal, and
+  destination the recipe sends keys to, then records a hash of the file and of
+  any browser flow files it uses. Edit any of them and approval is gone. `approve` only runs in a real terminal, and
   there is no switch that approves every recipe.
 - **A rotation never leaves you without a working key.** keymolt makes the new
   key, tests it, stores it everywhere the old one lived, saves its state, and
@@ -163,7 +163,9 @@ Each step is one of four kinds:
 - **`url`** — an HTTP request (`method`, `url`, `headers`, `body`). For `create`,
   `value` and `id` are dotted paths into the JSON response.
 - **`cmd`** — a command line, as a list. The new key arrives on the command's
-  **stdin**, never in the arguments.
+  **stdin**, never in the arguments. Call a published tool, such as
+  `npx convex`. Approval covers the command line, not the contents of a script
+  it runs, so a script in the recipe's folder could change after approval.
 - **`browser`** — a saved browser flow, for providers that only make keys in a
   dashboard.
 - **`vault`** — saves the new key back into the vault under a name, so an admin
@@ -391,7 +393,8 @@ comma-separated.
 
 CI has no vault for approvals either. List the SHA-256 hash of each recipe you
 trust in `KEYMOLT_APPROVED`, comma-separated. `keymolt approve` prints the
-hash, or you can run `sha256sum recipe.json`. Store the list as a CI secret, so
+hash. For a recipe with no browser flows, `sha256sum recipe.json` gives the
+same hash. Store the list as a CI secret, so
 a pull request that edits a recipe can't run it until you update the list. The
 hash covers the exact bytes, so keep git from changing line endings in recipe
 files (add `*.json -text` to `.gitattributes`).

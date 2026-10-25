@@ -70,6 +70,9 @@ README section "Writing a recipe" lists every field.
 - Name the exact target in every command, such as
   `--deployment TEAM:PROJECT:prod` for Convex. Ask the user for team, project
   and deployment names that you can't find in the project.
+- In `cmd` steps, call a published tool, such as `npx convex`. Don't write a
+  script for a `cmd` step to run: approval covers the command line, not the
+  script's contents.
 - Use credentials only as `{{cred:NAME}}`. If the credential doesn't exist yet,
   ask the user to run `keymolt cred-set NAME HOST`, where HOST is the API host,
   such as `api.openai.com`.
