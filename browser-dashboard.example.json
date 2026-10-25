@@ -7,7 +7,7 @@
     "id": "id"
   },
   "store": [
-    {"label": "convex", "cmd": ["npx", "convex", "env", "set", "ACME_API_KEY", "--prod", "--force"]}
+    {"label": "convex", "cmd": ["npx", "convex", "env", "set", "ACME_API_KEY", "--deployment", "TEAM:PROJECT:prod", "--force"]}
   ],
   "revoke": {
     "browser": "acme-revoke.flow.json",

@@ -15,7 +15,7 @@
   "store": [
     {
       "label": "convex",
-      "cmd": ["npx", "convex", "env", "set", "ELEVENLABS_API_KEY", "--prod", "--force"]
+      "cmd": ["npx", "convex", "env", "set", "ELEVENLABS_API_KEY", "--deployment", "TEAM:PROJECT:prod", "--force"]
     }
   ],
   "revoke": {

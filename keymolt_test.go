@@ -239,6 +239,20 @@ func TestRotate(t *testing.T) {
 		os.Remove(gen)
 	})
 
+	t.Run("commands run in the recipe's folder, not the caller's", func(t *testing.T) {
+		dir := t.TempDir()
+		p := filepath.Join(dir, "rel.json")
+		writeJSON(t, p, map[string]any{"name": "rel", "create": map[string]any{"cmd": helper("gen", ""), "value": "v", "id": "id"},
+			"store": []any{map[string]any{"label": "file", "cmd": helper("store", "rel_dest.txt")}}})
+		t.Chdir(t.TempDir()) // like a scheduler, which starts keymolt in its own folder
+		if code, out, _ := cli(t, "SECRET", "rotate", p); code != 0 {
+			t.Fatal(out)
+		}
+		if _, err := os.Stat(filepath.Join(dir, "rel_dest.txt")); err != nil {
+			t.Fatal("a relative path in a command must resolve against the recipe's folder:", err)
+		}
+	})
+
 	t.Run("empty key from the provider is revoked, old key untouched", func(t *testing.T) {
 		bad := maps(recipe, "name", "fake_empty", "create", maps(asMap(recipe["create"]), "url", base+"/keys-empty"))
 		p := filepath.Join(t.TempDir(), "empty.json")

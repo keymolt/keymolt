@@ -101,6 +101,13 @@ A recipe is a JSON file. It names the credential-making steps and where the new
 key goes. The engine has no provider-specific code — any provider and any
 destination that speak HTTP or have a CLI will work.
 
+Keep recipes where they are useful, such as a `keymolt/` folder in each project,
+or one folder for every project. keymolt keeps its state next to the recipes,
+and commands in a recipe run in the recipe's folder. Name the exact target in
+every command, such as `--deployment TEAM:PROJECT:prod` for Convex. Then a
+recipe works from any folder, from a scheduler, and on a machine with no copy of
+the project.
+
 A recipe has these steps:
 
 | Step | Required | What it does |
@@ -156,7 +163,7 @@ from stdin, so no wrapper is needed. See
     "headers": {"xi-api-key": "{{new}}"}
   },
   "store": [
-    {"label": "convex", "cmd": ["npx", "convex", "env", "set", "ELEVENLABS_API_KEY", "--prod", "--force"]}
+    {"label": "convex", "cmd": ["npx", "convex", "env", "set", "ELEVENLABS_API_KEY", "--deployment", "TEAM:PROJECT:prod", "--force"]}
   ],
   "revoke": {
     "method": "PATCH",
@@ -202,7 +209,7 @@ normal way:
 {
   "name": "acme_prod",
   "create": {"browser": "acme-create.flow.json", "vars": {"name": "keymolt-{{ts}}"}, "value": "value", "id": "id"},
-  "store": [{"label": "convex", "cmd": ["npx", "convex", "env", "set", "ACME_API_KEY", "--prod", "--force"]}],
+  "store": [{"label": "convex", "cmd": ["npx", "convex", "env", "set", "ACME_API_KEY", "--deployment", "TEAM:PROJECT:prod", "--force"]}],
   "revoke": {"browser": "acme-revoke.flow.json", "vars": {"old_id": "{{old_id}}"}}
 }
 ```

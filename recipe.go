@@ -176,6 +176,8 @@ func call(step map[string]any, ctx map[string]string, dir string) (ok bool, data
 			return false, nil, "", errors.New("empty cmd")
 		}
 		cmd := exec.Command(argv[0], argv[1:]...)
+		// like browser flows: a recipe works the same from any folder, and from a scheduler
+		cmd.Dir = dir
 		cmd.Stdin = strings.NewReader(ctx["new"]) // the new key goes over stdin, never into argv
 		var out bytes.Buffer
 		cmd.Stdout = &out
