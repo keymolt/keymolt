@@ -272,7 +272,7 @@ type receipt struct {
 type stateEntry struct {
 	ID    string   `json:"id"`
 	Stale []string `json:"stale"`
-	Found []string `json:"found,omitempty"` // stale keys located by the "find" step, revoked with find's own revoke
+	Found []string `json:"found,omitempty"` // keys made before keymolt and linked to it, revoked with find's own revoke
 }
 
 func rotate(recipePath string) (*receipt, error) { return runRecipe(recipePath, false) }
@@ -294,41 +294,25 @@ func runRecipe(recipePath string, createOnly bool) (*receipt, error) {
 	if len(asList(recipe["store"])) == 0 { // without this, a store typo would delete the old key and store nothing
 		return nil, errors.New("recipe has no store step; the new key would have nowhere to go")
 	}
-	if f := asMap(recipe["find"]); f != nil && (asMap(recipe["current"]) == nil || str(f["id"]) == "" || str(f["hint"]) == "") {
-		return nil, errors.New(`a "find" step needs a "current" step and "id" and "hint" paths`)
+	if err := checkFind(recipe); err != nil {
+		return nil, err
 	}
-	if !isApproved(recipePath) {
-		return nil, fmt.Errorf("recipe not approved: run `keymolt approve %s` in a terminal first", recipePath)
+	if err := checkApproved(recipePath); err != nil {
+		return nil, err
 	}
-	abs, _ := filepath.Abs(recipePath)
-	dir := filepath.Dir(abs)
-	unlock, err := lockDir(dir)
+	fs, err := openState(recipePath)
 	if err != nil {
 		return nil, err
 	}
-	defer unlock()
-	stateKey := filepath.Base(abs) // keyed by file, so two recipes that share a "name" field don't delete each other's keys
-	statePath := filepath.Join(dir, ".keymolt-state.json")
-	state := map[string]stateEntry{}
-	if b, err := os.ReadFile(statePath); err == nil {
-		if err := json.Unmarshal(b, &state); err != nil {
-			return nil, errors.New(".keymolt-state.json is unreadable")
-		}
-	}
-	saveState := func() error {
-		b, _ := json.MarshalIndent(state, "", "  ")
-		tmp := statePath + ".tmp"
-		if err := os.WriteFile(tmp, b, 0o600); err != nil {
-			return err
-		}
-		return os.Rename(tmp, statePath) // atomic: a crash can't leave a half-written state file
-	}
+	defer fs.unlock()
+	dir, state, stateKey, saveState := fs.dir, fs.state, fs.key, fs.save
 	entry := state[stateKey]
 	if createOnly && (entry.ID != "" || len(entry.Stale) > 0) {
 		return nil, fmt.Errorf("keymolt already made a key for this recipe; run `keymolt rotate %s` to replace it", recipePath)
 	}
 	prevID, found := entry.ID, slices.Clone(entry.Found)
 	unknownOld := entry.ID == "" && len(entry.Stale) == 0 // nothing tracked: a key set by hand may be in use
+	before := ""                                          // the key a destination held that keymolt doesn't track: reported, never revoked
 	if unknownOld && recipe["current"] != nil {
 		value, read, err := currentKey(asMap(recipe["current"]), dir)
 		if err != nil {
@@ -340,11 +324,8 @@ func runRecipe(recipePath string, createOnly bool) (*receipt, error) {
 		case read && createOnly:
 			return nil, fmt.Errorf("the destination already holds a key; run `keymolt rotate %s` to replace it", recipePath)
 		case read:
-			if prevID, err = findKeyID(asMap(recipe["find"]), value, dir); err != nil {
+			if before, err = findKeyID(asMap(recipe["find"]), value, dir); err != nil {
 				return nil, err
-			}
-			if prevID != "" {
-				found, unknownOld = append(found, prevID), false
 			}
 		}
 	}
@@ -378,11 +359,13 @@ func runRecipe(recipePath string, createOnly bool) (*receipt, error) {
 	sum := sha256.Sum256([]byte(ctx["new"]))
 	out := &receipt{Name: name, NewID: ctx["new_id"], Length: len(ctx["new"]), SHA256: hex.EncodeToString(sum[:])[:12],
 		Stored: []string{}, Revoked: []string{}, RevokeFailed: []string{}}
-	if prevID != "" && prevID != entry.ID {
-		out.Found = prevID
-	}
-	if unknownOld && recipe["revoke"] != nil { // keymolt only revokes keys it created or found
-		out.RevokeByHand = "if a key was in use before keymolt's first run, revoke it by hand"
+	out.Found = before
+	if unknownOld && recipe["revoke"] != nil { // keymolt only revokes keys it created or was linked to
+		out.RevokeByHand = "if a key was in use before keymolt's first run, it is still live: revoke it by hand"
+		if before != "" {
+			out.RevokeByHand = fmt.Sprintf("%s, the key in use before keymolt, is still live. Once nothing else uses it, "+
+				"or now if it may be leaked, run `keymolt revoke %s %s`", before, recipePath, before)
+		}
 	}
 
 	revoke := func(id string) bool {
@@ -481,6 +464,56 @@ func runRecipe(recipePath string, createOnly bool) (*receipt, error) {
 	_ = saveState() // best effort: worst case is a later run retries a delete that already happened
 	out.OK, out.RevokeFailed = true, stale
 	return out, nil
+}
+
+// checkFind rejects a "find" step that can't match a key.
+func checkFind(recipe map[string]any) error {
+	if f := asMap(recipe["find"]); f != nil && (asMap(recipe["current"]) == nil || str(f["id"]) == "" || str(f["hint"]) == "") {
+		return errors.New(`a "find" step needs a "current" step and "id" and "hint" paths`)
+	}
+	return nil
+}
+
+func checkApproved(recipePath string) error {
+	if !isApproved(recipePath) {
+		return fmt.Errorf("recipe not approved: run `keymolt approve %s` in a terminal first", recipePath)
+	}
+	return nil
+}
+
+// folderState is the state file in a recipe's folder, locked while one command uses it.
+type folderState struct {
+	dir, path string
+	key       string // the recipe's file name, so two recipes that share a "name" field don't delete each other's keys
+	state     map[string]stateEntry
+	unlock    func()
+}
+
+func openState(recipePath string) (*folderState, error) {
+	abs, _ := filepath.Abs(recipePath)
+	fs := &folderState{dir: filepath.Dir(abs), key: filepath.Base(abs), state: map[string]stateEntry{}}
+	fs.path = filepath.Join(fs.dir, ".keymolt-state.json")
+	unlock, err := lockDir(fs.dir)
+	if err != nil {
+		return nil, err
+	}
+	fs.unlock = unlock
+	if b, err := os.ReadFile(fs.path); err == nil {
+		if err := json.Unmarshal(b, &fs.state); err != nil {
+			unlock()
+			return nil, errors.New(".keymolt-state.json is unreadable")
+		}
+	}
+	return fs, nil
+}
+
+func (fs *folderState) save() error {
+	b, _ := json.MarshalIndent(fs.state, "", "  ")
+	tmp := fs.path + ".tmp"
+	if err := os.WriteFile(tmp, b, 0o600); err != nil {
+		return err
+	}
+	return os.Rename(tmp, fs.path) // atomic: a crash can't leave a half-written state file
 }
 
 // currentKey reads the key in use now from the destination, with the recipe's "current" step. read is false

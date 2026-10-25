@@ -110,7 +110,7 @@ A recipe has these steps:
 | `verify` | no | Tests the new key before storing it. |
 | `revoke` | no | Deletes the old key. Omit it and keymolt never deletes. |
 | `current` | no | Reads the key in use now from the destination. See [Keys made before keymolt](#keys-made-before-keymolt). |
-| `find` | no | Finds that key's id at the provider, so the first rotation can delete it. |
+| `find` | no | Finds that key's id at the provider, for `keymolt find`. |
 
 Each step is one of four kinds:
 
@@ -238,25 +238,34 @@ dashboard.
 
 ### Keys made before keymolt
 
-keymolt deletes keys by id, and on its first run it only knows the ids of keys it
-made. A key you made by hand would stay live. Two optional steps fix that:
+keymolt deletes keys by id, and it only knows the ids of keys it made. It never
+decides by itself to delete a key you made: the same key may live in places the
+recipe doesn't list, such as a dev deployment. You decide, with three commands:
+
+```
+keymolt find RECIPE          # prints the id of the key the destination holds now
+keymolt link RECIPE ID       # track that key: the next rotate replaces it, then revokes it
+keymolt revoke RECIPE ID     # revoke a key now, without making a new one
+```
+
+Use `revoke` at once for a key that may be leaked. Use `link`, then `rotate`,
+once you know the recipe stores to every place that uses the key.
+
+`find` needs two optional recipe steps:
 
 - **`current`** reads the key the destination holds now, such as
   `npx convex env get OPENAI_API_KEY`. keymolt keeps the value in memory and
-  never prints it. If the destination is empty, there is nothing to delete.
+  never prints it.
 - **`find`** lists the provider's keys. Providers show each key masked, such as
   `sk-ab...xY7q`. keymolt picks the one key whose visible start and end match
   the current key. `list` is the path to the array, and `id` and `hint` are the
-  paths inside each item. An optional `revoke` inside `find` deletes that key,
-  for providers where keys made by hand have their own delete endpoint.
+  paths inside each item. An optional `revoke` inside `find` deletes keys you
+  made, for providers where those have their own delete endpoint.
 
-If no key matches, or more than one does, keymolt deletes nothing and the
-receipt asks you to revoke the old key by hand. A hint must show at least four
-characters. With `current`, `keymolt create` also refuses when the destination
-already holds a key. See
-[`openai-to-convex.example.json`](openai-to-convex.example.json): it finds a
-project key you made in the OpenAI dashboard and deletes it after the new key
-is stored.
+If no key matches, or more than one does, `find` names none. A hint must show at
+least four characters. With these steps, `rotate` also reports the key it
+replaced but didn't delete, and `create` refuses when the destination already
+holds a key. See [`openai-to-convex.example.json`](openai-to-convex.example.json).
 
 ### Options
 

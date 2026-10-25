@@ -100,23 +100,64 @@ func TestFindKeyMadeByHand(t *testing.T) {
 		return dest, p
 	}
 
-	t.Run("a key made by hand is found and revoked with find's own revoke", func(t *testing.T) {
+	t.Run("rotate reports a key made by hand and leaves it live", func(t *testing.T) {
 		dest, p := setup("sk-hand-SECRET-1234")
 		code, out, _ := cli(t, "SECRET", "rotate", p)
 		got, _ := os.ReadFile(dest)
-		if code != 0 || out["found"] != "hand1" || out["revoke_by_hand"] != nil || !slices.Contains(f.deleted, "api_keys/hand1") ||
-			string(got) != f.keys["k1"] {
-			t.Fatal("first rotate should replace and revoke the hand-made key:", out, f.deleted)
+		if code != 0 || out["found"] != "hand1" || !strings.Contains(str(out["revoke_by_hand"]), "keymolt revoke") ||
+			f.keys["hand1"] == "" || len(f.deleted) != 0 || string(got) != f.keys[str(out["new_id"])] {
+			t.Fatal("rotate must store a new key and leave the hand-made key live:", out, f.deleted)
 		}
-		if code, out, _ = cli(t, "SECRET", "rotate", p); code != 0 || !slices.Equal(list(out["revoked"]), []string{"k1"}) ||
-			!slices.Contains(f.deleted, "keys/k1") {
+	})
+
+	t.Run("find, link, then rotate replaces the key and revokes it", func(t *testing.T) {
+		_, p := setup("sk-hand-SECRET-1234")
+		if code, out, _ := cli(t, "SECRET", "find", p); code != 0 || out["id"] != "hand1" {
+			t.Fatal("find:", out)
+		}
+		if code, out, _ := cli(t, "SECRET", "link", p, "hand1"); code != 0 {
+			t.Fatal("link:", out)
+		}
+		code, out, _ := cli(t, "SECRET", "rotate", p)
+		if code != 0 || !slices.Equal(list(out["revoked"]), []string{"hand1"}) || !slices.Contains(f.deleted, "api_keys/hand1") ||
+			out["revoke_by_hand"] != nil {
+			t.Fatal("a linked key is revoked with find's own revoke:", out, f.deleted)
+		}
+		own := str(out["new_id"])
+		if code, out, _ = cli(t, "SECRET", "rotate", p); code != 0 || !slices.Contains(f.deleted, "keys/"+own) {
 			t.Fatal("later rotations revoke keymolt's own key with the recipe's revoke:", out, f.deleted)
 		}
 	})
 
-	t.Run("two keys that fit the hint: revoke nothing, ask the user", func(t *testing.T) {
+	t.Run("revoke deletes a key now, with the step that fits it", func(t *testing.T) {
+		f.keys["hand4"] = "sk-left-SECRET-4444"
+		_, p := setup("")
+		if code, out, _ := cli(t, "SECRET", "revoke", p, "hand4"); code != 0 || !slices.Contains(f.deleted, "api_keys/hand4") {
+			t.Fatal("a key keymolt doesn't track is revoked with find's own revoke:", out, f.deleted)
+		}
+		_, out, _ := cli(t, "SECRET", "create", p)
+		own := str(out["new_id"])
+		code, out, _ := cli(t, "SECRET", "revoke", p, own)
+		if code != 0 || !slices.Contains(f.deleted, "keys/"+own) || !strings.Contains(str(out["note"]), "keymolt rotate") {
+			t.Fatal("keymolt's own key is revoked with the recipe's revoke:", out, f.deleted)
+		}
+		b, _ := os.ReadFile(filepath.Join(filepath.Dir(p), ".keymolt-state.json"))
+		if strings.Contains(string(b), own) {
+			t.Fatal("a revoked key must leave the state:", string(b))
+		}
+		for _, bad := range []string{"../admin", "-rf", "a/b", "a?x=1", ""} {
+			if code, _, _ := cli(t, "SECRET", "revoke", p, bad); code != 1 {
+				t.Fatalf("id %q must be refused", bad)
+			}
+		}
+	})
+
+	t.Run("two keys that fit the hint: find names none, rotate revokes nothing", func(t *testing.T) {
 		f.keys["hand2"], f.keys["hand3"] = "sk-twin-SECRET-a-9999", "sk-twin-SECRET-b-9999"
 		_, p := setup("sk-twin-SECRET-a-9999")
+		if code, out, _ := cli(t, "SECRET", "find", p); code != 1 || out["id"] != nil {
+			t.Fatal("an ambiguous match must not name a key:", out)
+		}
 		before := len(f.deleted)
 		code, out, _ := cli(t, "SECRET", "rotate", p)
 		if code != 0 || out["found"] != nil || out["revoke_by_hand"] == nil || len(f.deleted) != before {

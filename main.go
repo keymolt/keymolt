@@ -17,6 +17,9 @@ const usage = `keymolt: create, store, verify and revoke API keys without printi
   keymolt approve RECIPE                             human, once: shows where a recipe sends keys, then trusts it
   keymolt create RECIPE                              first key: new key -> verify -> store. Refuses if keymolt already made one.
   keymolt rotate RECIPE                              new key -> verify -> store -> revoke old. Prints metadata only.
+  keymolt find RECIPE                                print the id of the key the recipe's destination holds now
+  keymolt link RECIPE ID                             track key ID, so the next rotate replaces it, then revokes it
+  keymolt revoke RECIPE ID                           revoke key ID now, without making a new one
   keymolt rotate-all FOLDER                          rotate every recipe in FOLDER, append receipts to FOLDER/keymolt.log
   keymolt schedule FOLDER weekly|monthly             run rotate-all on a schedule (Task Scheduler, launchd or systemd)
   keymolt rescue scan RAILWAY_PROJECT_ID             after a breach: list every key in a Railway project
@@ -55,6 +58,24 @@ func run(args []string, w io.Writer) (code int) {
 		var r *receipt
 		if r, err = runRecipe(args[1], args[0] == "create"); err == nil {
 			printJSON(w, r)
+		}
+	case len(args) == 2 && args[0] == "find":
+		var id string
+		if id, err = findCommand(args[1]); err == nil {
+			printJSON(w, map[string]any{"ok": true, "id": id})
+		}
+	case len(args) == 3 && args[0] == "link":
+		if err = linkCommand(args[1], args[2]); err == nil {
+			printJSON(w, map[string]any{"ok": true, "linked": args[2]})
+		}
+	case len(args) == 3 && args[0] == "revoke":
+		var note string
+		if note, err = revokeCommand(args[1], args[2]); err == nil {
+			printJSON(w, struct {
+				OK      bool   `json:"ok"`
+				Revoked string `json:"revoked"`
+				Note    string `json:"note,omitempty"`
+			}{true, args[2], note})
 		}
 	case len(args) == 2 && args[0] == "rotate-all":
 		err = rotateAll(args[1], w)
