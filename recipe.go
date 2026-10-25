@@ -603,8 +603,8 @@ func lockDir(dir string) (func(), error) {
 	return func() { os.Remove(p) }, nil
 }
 
-// rotateAll rotates each recipe in folder, and in every folder named keymolt below it, so one run covers many
-// projects. Each of those folders gets a log of one receipt line per recipe. Receipts hold no secrets.
+// rotateAll rotates each recipe in folder, and in every .keymolt folder below it, so one run covers many projects.
+// Each of those folders gets a log of one receipt line per recipe. Receipts hold no secrets.
 func rotateAll(folder string, w io.Writer) error {
 	if st, err := os.Stat(folder); err != nil || !st.IsDir() {
 		return fmt.Errorf("%s is not a folder", folder)
@@ -613,10 +613,11 @@ func rotateAll(folder string, w io.Writer) error {
 	_ = filepath.WalkDir(folder, func(p string, d os.DirEntry, err error) error {
 		switch {
 		case err != nil || !d.IsDir() || p == folder:
+		case d.Name() == ".keymolt":
+			dirs = append(dirs, p)
+			return filepath.SkipDir // recipes sit directly inside; ~/.keymolt's subfolders hold browser profiles
 		case d.Name() == "node_modules" || strings.HasPrefix(d.Name(), "."):
 			return filepath.SkipDir // large, and never hold recipes
-		case d.Name() == "keymolt":
-			dirs = append(dirs, p)
 		}
 		return nil
 	})

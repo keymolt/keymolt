@@ -20,7 +20,7 @@ const usage = `keymolt: create, store, verify and revoke API keys without printi
   keymolt find RECIPE                                print the id of the key the recipe's destination holds now
   keymolt link RECIPE ID                             human: track key ID, so the next rotate replaces it, then revokes it
   keymolt revoke RECIPE ID                           revoke key ID now, without a new one. Human, for a key keymolt doesn't track.
-  keymolt rotate-all FOLDER                          rotate every recipe in FOLDER and in each keymolt folder below it; logs to keymolt.log
+  keymolt rotate-all FOLDER                          rotate every recipe in FOLDER and in each .keymolt folder below it; logs to keymolt.log
   keymolt schedule FOLDER weekly|monthly             run rotate-all on a schedule (Task Scheduler, launchd or systemd)
   keymolt rescue scan RAILWAY_PROJECT_ID             after a breach: list every key in a Railway project
   keymolt rescue rotate RAILWAY_PROJECT_ID [k=v ...] ...and rotate each key that has a provider template

@@ -128,9 +128,9 @@ A recipe is a JSON file. It names the credential-making steps and where the new
 key goes. The engine has no provider-specific code — any provider and any
 destination that speak HTTP or have a CLI will work.
 
-Keep recipes where they are useful, such as a `keymolt/` folder in each project,
-or one folder for every project. keymolt keeps its state next to the recipes,
-and commands in a recipe run in the recipe's folder. Name the exact target in
+Keep recipes in a `.keymolt/` folder in each project, or in one folder for
+every project, such as `~/.keymolt/`. keymolt keeps its state next to the
+recipes, and commands in a recipe run in the recipe's folder. Name the exact target in
 every command, such as `--deployment TEAM:PROJECT:prod` for Convex. Then a
 recipe works from any folder, from a scheduler, and on a machine with no copy of
 the project.
@@ -319,14 +319,16 @@ scheduler at `rotate-all` and let it run on its own:
 keymolt rotate-all ./recipes
 ```
 
-This rotates every recipe in a folder, and in every folder named `keymolt`
-below it. Each of those folders gets a `keymolt.log` with one receipt line per
-recipe. So if each project keeps its recipes in a `keymolt/` folder,
+This rotates every recipe in a folder, and in every `.keymolt` folder below
+it. Each of those folders gets a `keymolt.log` with one receipt line per
+recipe. So if each project keeps its recipes in a `.keymolt/` folder,
 `keymolt rotate-all C:\P` (or `~/code`) covers every project. It skips
-`node_modules`, hidden folders, `*.example.json` files and JSON files with no
-`create` step, such as browser flows. Trigger it from whatever scheduler you already have — your
-agent's runtime, a GitHub Actions cron, a Kubernetes CronJob, Railway cron, or a
-plain crontab entry.
+`node_modules`, other hidden folders, `*.example.json` files and JSON files
+with no `create` step, such as browser flows.
+
+Trigger it from whatever scheduler you already have — your agent's runtime, a
+GitHub Actions cron, a Kubernetes CronJob, Railway cron, or a plain crontab
+entry.
 
 If you have no scheduler, `keymolt schedule` is a shortcut that registers
 `rotate-all` with your OS — Task Scheduler, launchd, or a systemd user timer:

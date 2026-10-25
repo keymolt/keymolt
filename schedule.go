@@ -25,7 +25,7 @@ func slug(s string) string {
 // It is pure so every OS can be tested from any OS.
 func schedulePlan(folder, cadence, goos, exe, home string) (name string, files map[string]string, cmds [][]string) {
 	abs, _ := filepath.Abs(folder)
-	// from the whole path, so each project's keymolt folder gets its own job.
+	// from the whole path, so each project's .keymolt folder gets its own job.
 	// shortcut: paths that differ only in case or punctuation share a job, add a hash if that ever bites
 	name = "keymolt-" + slug(abs)
 	argv := []string{exe, "rotate-all", abs}

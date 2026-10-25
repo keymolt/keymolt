@@ -345,13 +345,14 @@ func TestRotate(t *testing.T) {
 		}
 	})
 
-	t.Run("rotate-all writes one receipt line per recipe, in the folder and each keymolt folder below it", func(t *testing.T) {
+	t.Run("rotate-all writes one receipt line per recipe, in the folder and each .keymolt folder below it", func(t *testing.T) {
 		rdir := t.TempDir() // its own folder, so state starts fresh
-		proj := filepath.Join(rdir, "app", "keymolt")
+		proj := filepath.Join(rdir, "app", ".keymolt")
 		for _, p := range []string{filepath.Join(rdir, "one.json"), filepath.Join(proj, "two.json"),
-			filepath.Join(rdir, "app", "config", "three.json"),              // not in a keymolt folder
-			filepath.Join(rdir, "app", "node_modules", "keymolt", "x.json"), // never searched
-			filepath.Join(proj, "copy-me.example.json")} {                   // a template
+			filepath.Join(rdir, "app", "keymolt", "three.json"),              // not a .keymolt folder
+			filepath.Join(rdir, "app", "node_modules", ".keymolt", "x.json"), // never searched
+			filepath.Join(proj, "profiles", "x.json"),                        // below .keymolt: browser profiles
+			filepath.Join(proj, "copy-me.example.json")} {                    // a template
 			if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
 				t.Fatal(err)
 			}
@@ -448,10 +449,10 @@ func TestSchedulePlan(t *testing.T) {
 		!strings.Contains(cmds[0][3], "-StartWhenAvailable") || !strings.Contains(cmds[0][3], `'"rotate-all" "`) {
 		t.Fatal("windows plan:", name, cmds)
 	}
-	a, _, _ := schedulePlan(filepath.Join(dir, "app-one", "keymolt"), "weekly", "windows", "keymolt.exe", "")
-	b, _, _ := schedulePlan(filepath.Join(dir, "app-two", "keymolt"), "weekly", "windows", "keymolt.exe", "")
+	a, _, _ := schedulePlan(filepath.Join(dir, "app-one", ".keymolt"), "weekly", "windows", "keymolt.exe", "")
+	b, _, _ := schedulePlan(filepath.Join(dir, "app-two", ".keymolt"), "weekly", "windows", "keymolt.exe", "")
 	if a == b {
-		t.Fatal("each project's keymolt folder must get its own job:", a)
+		t.Fatal("each project's .keymolt folder must get its own job:", a)
 	}
 	_, files, cmds = schedulePlan(dir, "monthly", "darwin", "/usr/local/bin/keymolt", "/Users/me")
 	for _, plist := range files {
