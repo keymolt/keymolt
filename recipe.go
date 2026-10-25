@@ -126,10 +126,10 @@ func eachStep(recipe map[string]any, add func(label string, step map[string]any)
 	}
 }
 
-// refused reports a store the destination clearly turned down, so the new key can't have landed there.
-// detail is what call reports: "http 4xx" for a rejected request, "command not found" for a tool that never ran.
+// refused reports a store that can't have written anything: the caller wasn't allowed, the target doesn't exist, or
+// the tool never ran. Other errors, such as 400 or 409, can come after a write, so they count as "may have landed".
 func refused(detail string) bool {
-	return detail == "command not found" || strings.HasPrefix(detail, "http 4")
+	return slices.Contains([]string{"http 401", "http 403", "http 404", "command not found"}, detail)
 }
 
 // flowPath is where a browser step's flow file is: relative paths start at the recipe's folder.
@@ -347,13 +347,18 @@ type stateEntry struct {
 	ID    string   `json:"id"`
 	Stale []string `json:"stale"`
 	Found []string `json:"found,omitempty"` // keys made before keymolt and linked to it, revoked with find's own revoke
+	// Pending is the new key of a run whose store failed and may have landed. It is also in Stale, so the next good
+	// run revokes it. Unattended runs make no more keys while it is set.
+	Pending string `json:"pending,omitempty"`
 }
 
-func rotate(recipePath string) (*receipt, error) { return runRecipe(recipePath, false) }
+// rotate is the unattended rotation that rotate-all runs.
+func rotate(recipePath string) (*receipt, error) { return runRecipe(recipePath, false, true) }
 
 // runRecipe makes a new key and stores it, then revokes the old one. createOnly refuses to run when the
 // folder's state already records a key for this recipe. It can't see keys set by hand or tracked in another folder.
-func runRecipe(recipePath string, createOnly bool) (*receipt, error) {
+// unattended refuses to run while a failed store left a pending key, so a broken schedule leaves one unused key, not one per run.
+func runRecipe(recipePath string, createOnly, unattended bool) (*receipt, error) {
 	recipe, err := loadApproved(recipePath)
 	if err != nil {
 		return nil, err
@@ -378,6 +383,9 @@ func runRecipe(recipePath string, createOnly bool) (*receipt, error) {
 	defer fs.unlock()
 	dir, state, stateKey, saveState := fs.dir, fs.state, fs.key, fs.save
 	entry := state[stateKey]
+	if unattended && entry.Pending != "" {
+		return nil, fmt.Errorf("the last rotation's store failed, so key %s may be live and unused; fix the store, then run `keymolt rotate %s`", entry.Pending, recipePath)
+	}
 	if createOnly && (entry.ID != "" || len(entry.Stale) > 0) {
 		return nil, fmt.Errorf("keymolt already made a key for this recipe; run `keymolt rotate %s` to replace it", recipePath)
 	}
@@ -408,7 +416,7 @@ func runRecipe(recipePath string, createOnly bool) (*receipt, error) {
 				f = append(f, id)
 			}
 		}
-		return stateEntry{ctx["new_id"], stale, f}
+		return stateEntry{ctx["new_id"], stale, f, ""}
 	}
 
 	create := asMap(recipe["create"])
@@ -431,7 +439,7 @@ func runRecipe(recipePath string, createOnly bool) (*receipt, error) {
 	}
 	// track the new key before anything else can fail, so a crash or a failed cleanup never leaves it live and unknown
 	if ctx["new_id"] != "" {
-		state[stateKey] = stateEntry{entry.ID, append(slices.Clone(entry.Stale), ctx["new_id"]), entry.Found}
+		state[stateKey] = stateEntry{entry.ID, append(slices.Clone(entry.Stale), ctx["new_id"]), entry.Found, entry.Pending}
 		if err := saveState(); err != nil {
 			return nil, fmt.Errorf("create worked but state save failed (%v); check the provider for an orphaned key", err)
 		}
@@ -515,6 +523,11 @@ func runRecipe(recipePath string, createOnly bool) (*receipt, error) {
 		if !ok {
 			// the store may have landed anyway, such as a timeout after the write, or earlier stores did: keep every
 			// key live. State already has the old key as current and the new one as stale, so the next run revokes it.
+			if e := state[stateKey]; ctx["new_id"] != "" {
+				e.Pending = ctx["new_id"]
+				state[stateKey] = e
+				_ = saveState() // best effort: the key is tracked in Stale either way
+			}
 			if len(out.Stored) > 0 {
 				return nil, fmt.Errorf("store #%d failed (%s) after storing to %v; old and new keys both live, rerun", i, detail, out.Stored)
 			}
@@ -585,7 +598,7 @@ func openState(recipePath string) (*folderState, error) {
 		}
 	}
 	for _, e := range fs.state { // ids go into URLs and commands, and the file may have been edited
-		for _, id := range append(append([]string{e.ID}, e.Stale...), e.Found...) {
+		for _, id := range append(append([]string{e.ID, e.Pending}, e.Stale...), e.Found...) {
 			if id != "" && !keyID.MatchString(id) {
 				unlock()
 				return nil, fmt.Errorf("%s holds %q, which is not a key id; fix or delete it", fs.path, id)

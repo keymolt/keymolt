@@ -53,7 +53,7 @@ func run(args []string, w io.Writer) (code int) {
 		err = approveCommand(args[1], w)
 	case len(args) == 2 && (args[0] == "create" || args[0] == "rotate"):
 		var r *receipt
-		if r, err = runRecipe(args[1], args[0] == "create"); err == nil {
+		if r, err = runRecipe(args[1], args[0] == "create", false); err == nil {
 			printJSON(w, r)
 		}
 	case len(args) == 2 && args[0] == "find":

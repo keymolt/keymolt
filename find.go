@@ -110,6 +110,9 @@ func revokeCommand(recipePath, id string) (note string, err error) {
 	}
 	drop := func(s string) bool { return s == id }
 	e.Stale, e.Found = slices.DeleteFunc(e.Stale, drop), slices.DeleteFunc(e.Found, drop)
+	if e.Pending == id {
+		e.Pending = ""
+	}
 	fs.state[fs.key] = e
 	if err := fs.save(); err != nil {
 		return "", fmt.Errorf("key %s revoked, but state save failed (%v)", id, err)

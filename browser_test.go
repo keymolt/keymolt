@@ -156,4 +156,26 @@ func TestBrowserKeyOnlyOnHTTPS(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "isn't https") {
 		t.Fatal("a flow must not type the new key into a page that isn't https:", err)
 	}
+	flow["steps"] = []any{map[string]any{"goto": "http://example.com/?k={{key}}"}}
+	if _, err := runFlow(flow, map[string]string{"key": "sk-new-SECRET-fill"}); err == nil || !strings.Contains(err.Error(), "isn't https") {
+		t.Fatal("a flow must not open a plain-http URL with the new key in it:", err)
+	}
+}
+
+func TestSweepDownloads(t *testing.T) {
+	old, err := os.MkdirTemp("", "keymolt-dl-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fresh, _ := os.MkdirTemp("", "keymolt-dl-")
+	defer os.RemoveAll(fresh)
+	long := time.Now().Add(-2 * time.Hour) // left by a run that was killed
+	_ = os.Chtimes(old, long, long)
+	sweepDownloads()
+	if _, err := os.Stat(old); !os.IsNotExist(err) {
+		t.Fatal("an old download folder must be removed")
+	}
+	if _, err := os.Stat(fresh); err != nil {
+		t.Fatal("a folder another run may still use must stay")
+	}
 }

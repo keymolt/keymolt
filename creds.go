@@ -158,15 +158,16 @@ func readRecipe(path string) (map[string]any, string, error) {
 	return recipe, hex.EncodeToString(h.Sum(nil)), nil
 }
 
-// visible shows recipe text as text: a terminal would act on characters such as \r or a text-direction mark, so
-// a recipe could draw a fake destination over the real one on the approval screen.
+// visible shows recipe text as plain ASCII. A terminal would act on characters such as \r or a text-direction mark,
+// so a recipe could draw a fake destination over the real one, and a lookalike letter, such as a Cyrillic а in a
+// host name, would pass for the real one. Both show as escapes, such as \r and \u0430.
 func visible(s string) string {
 	var b strings.Builder
 	for _, r := range s {
-		if unicode.IsGraphic(r) {
+		if r <= unicode.MaxASCII && unicode.IsGraphic(r) {
 			b.WriteRune(r)
 		} else {
-			q := strconv.QuoteRune(r)
+			q := strconv.QuoteRuneToASCII(r)
 			b.WriteString(q[1 : len(q)-1])
 		}
 	}

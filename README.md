@@ -28,8 +28,10 @@ The human keeps the power to see secrets and to decide where they may go.
   refused.
 - **A key only goes to hosts you allowed.** Each credential is locked to a list
   of hosts, and only over HTTPS. A recipe that tries to send a key anywhere else
-  fails. The new key also travels only over HTTPS (or to localhost), and
-  keymolt refuses a redirect to another host or down to plain HTTP.
+  fails. keymolt also sends the new key only over HTTPS (or to localhost): in
+  requests, and in what a browser flow types or opens. It refuses a redirect to
+  another host or down to plain HTTP. What a provider's page does with a key
+  after keymolt types it is up to that page.
 - **A recipe can only run after a human approves it.** `approve` prints every
   destination the recipe sends keys to and asks you to confirm. It records a
   hash of the file and of any browser flow files it uses, and each run uses the
@@ -38,6 +40,11 @@ The human keeps the power to see secrets and to decide where they may go.
 - **A rotation never leaves you without a working key.** keymolt makes the new
   key, tests it, stores it everywhere the old one lived, saves its state, and
   only then deletes the old key. If any step fails, the live key stays live.
+  If a store fails in a way that may still have saved the new key, keymolt
+  keeps both keys live and marks the new one as pending. `rotate-all` then
+  makes no more keys for that recipe until you fix the store and run
+  `keymolt rotate RECIPE`, so a broken schedule leaves one unused key, not one
+  per run.
 
 ### Where the protection ends
 

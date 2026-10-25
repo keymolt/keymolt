@@ -127,6 +127,17 @@ func fillAction(sel, value string) chromedp.Action[chromedp.Void] {
 	return chromedp.Steps(chromedp.Clear(chromedp.CSS(sel)), chromedp.SendKeys(chromedp.CSS(sel), value))
 }
 
+// sweepDownloads removes download folders that killed runs left behind: they may hold a downloaded key.
+// An hour is far longer than any flow runs, so a folder another run still uses is never removed.
+func sweepDownloads() {
+	dirs, _ := filepath.Glob(filepath.Join(os.TempDir(), "keymolt-dl-*"))
+	for _, d := range dirs {
+		if st, err := os.Stat(d); err == nil && time.Since(st.ModTime()) > time.Hour {
+			_ = os.RemoveAll(d)
+		}
+	}
+}
+
 // runFlow runs a browser flow and returns {"id": ..., "value": key} as JSON, or {} when the flow has no capture.
 func runFlow(flow map[string]any, vars map[string]string) ([]byte, error) {
 	profile, err := renderString(str(flow["profile"]), vars, "")
@@ -141,6 +152,7 @@ func runFlow(flow map[string]any, vars map[string]string) ([]byte, error) {
 	if t, err := json.Number(str(flow["timeout"])).Float64(); err == nil && t > 0 {
 		timeout = time.Duration(t * float64(time.Second))
 	}
+	sweepDownloads()
 	downloads, err := os.MkdirTemp("", "keymolt-dl-")
 	if err != nil {
 		return nil, err
@@ -217,6 +229,10 @@ func runFlow(flow map[string]any, vars map[string]string) ([]byte, error) {
 		stepCtx, stepCancel := context.WithTimeout(ctx, 30*time.Second)
 		switch {
 		case step["goto"] != nil:
+			if u := str(step["goto"]); destHost(u) == "" && scrub(u) != u { // a key in a URL goes over https or to localhost only
+				stepCancel()
+				return nil, errors.New("refusing to open a URL with a key in it that isn't https")
+			}
 			err = chromedp.Do(stepCtx, chromedp.Navigate(str(step["goto"])))
 		case step["click"] != nil:
 			err = chromedp.Do(stepCtx, clickAction(str(step["click"])))
