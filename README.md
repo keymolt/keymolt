@@ -47,6 +47,24 @@ that has no access to your vault.
 
 ## Install
 
+Download the file for your system from the
+[latest release](https://github.com/keymolt/keymolt/releases/latest), rename it
+to `keymolt` (`keymolt.exe` on Windows), and put it in a folder on your PATH.
+`checksums.txt` in the release lists the SHA-256 of each file.
+
+On macOS or Linux:
+
+```
+curl -fsSL -o keymolt "https://github.com/keymolt/keymolt/releases/latest/download/keymolt_$(uname -s | tr A-Z a-z)_$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')"
+chmod +x keymolt && sudo mv keymolt /usr/local/bin/
+```
+
+The binaries are not signed. If you download one with a browser, macOS blocks
+it until you run `xattr -d com.apple.quarantine keymolt`, and Windows SmartScreen
+may ask you to confirm.
+
+With Go installed:
+
 ```
 go install github.com/keymolt/keymolt@latest
 ```
@@ -59,6 +77,15 @@ go build -o keymolt .
 
 Credentials live in your OS vault: Keychain on macOS, Credential Manager on
 Windows, Secret Service on Linux.
+
+To teach your coding agent to use keymolt, install its skill:
+
+```
+npx skills add keymolt/keymolt
+```
+
+The skill tells the agent which command fits each task, to leave `cred-set` and
+`approve` to you, and never to read a key.
 
 ## Quick start
 
