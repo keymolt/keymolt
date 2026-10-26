@@ -76,6 +76,10 @@ README section "Writing a recipe" lists every field.
   script's contents. The new key reaches the command on stdin; `{{new}}` on a
   command line is refused. A `url` step sends `{{new}}` only over https.
 - Give each step exactly one of `url`, `cmd`, `browser` or `vault`.
+- If the create response has no key id, read the provider's full API for list
+  and delete endpoints before you tell the user keymolt can't revoke the key.
+  If the provider deletes keys by name, set `create`'s `id` to the name the
+  request sends, such as `"keymolt-{{ts}}"`.
 - Use credentials only as `{{cred:NAME}}`. If the credential doesn't exist yet,
   ask the user to run `keymolt cred-set NAME HOST`, where HOST is the API host,
   such as `api.openai.com`.

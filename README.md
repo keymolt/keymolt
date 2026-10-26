@@ -183,7 +183,10 @@ A recipe has these steps:
 Each step is one of four kinds:
 
 - **`url`** — an HTTP request (`method`, `url`, `headers`, `body`). For `create`,
-  `value` and `id` are dotted paths into the JSON response.
+  `value` and `id` are dotted paths into the JSON response. If the response has
+  no id but the provider deletes keys by name, as Convex does, set `id` to the
+  name the request sends, such as `"keymolt-{{ts}}"`. keymolt then tracks the
+  key by that name.
 - **`cmd`** — a command line, as a list. The new key arrives on the command's
   **stdin**, and `{{new}}` can't go in the arguments. Call a published tool,
   such as `npx convex`. Approval covers the command line, not the code it runs:

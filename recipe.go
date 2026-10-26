@@ -421,6 +421,20 @@ func runRecipe(recipePath string, createOnly, unattended bool) (*receipt, error)
 	}
 
 	create := asMap(recipe["create"])
+	// an id with placeholders is the name the request sends, for providers like Convex that delete by name and return no id
+	named := strings.Contains(str(create["id"]), "{{")
+	newID := ""
+	if named {
+		if newID, err = renderString(str(create["id"]), ctx, ""); err != nil {
+			return nil, err
+		}
+		if !keyID.MatchString(newID) {
+			return nil, fmt.Errorf("create's id %q isn't safe to put in a URL; use letters, digits, _ . : - and {{ts}} or {{old_id}}", newID)
+		}
+		if slices.Contains(slices.Concat([]string{entry.ID}, entry.Stale, entry.Found, entry.Pending), newID) {
+			return nil, fmt.Errorf("create's id %q names a key keymolt already tracks; wait a second and rerun, or add {{ts}} to the id", newID)
+		}
+	}
 	ok, resp, detail, err := call(create, ctx, dir)
 	if err != nil {
 		return nil, err
@@ -429,11 +443,16 @@ func runRecipe(recipePath string, createOnly, unattended bool) (*receipt, error)
 		return nil, fmt.Errorf("create failed (%s)", detail)
 	}
 	newValue, err1 := pick(resp, str(create["value"]))
-	newID, err2 := pick(resp, str(create["id"]))
+	var err2 error
+	if !named {
+		var id any
+		id, err2 = pick(resp, str(create["id"]))
+		newID = str(id)
+	}
 	if err := errors.Join(err1, err2); err != nil {
 		return nil, fmt.Errorf("create worked but %v; check the provider for an orphaned key", err)
 	}
-	ctx["new"], ctx["new_id"] = str(newValue), str(newID)
+	ctx["new"], ctx["new_id"] = str(newValue), newID
 	addSecret(ctx["new"])
 	if ctx["new_id"] != "" && !keyID.MatchString(ctx["new_id"]) {
 		return nil, fmt.Errorf("create returned id %q, which keymolt can't put in a URL safely; delete that key at the provider", ctx["new_id"])
