@@ -83,7 +83,11 @@ func recipeDestinations(recipe map[string]any) []string {
 		case "url":
 			out = append(out, label+" -> "+str(step["url"]))
 		case "cmd":
-			out = append(out, label+" -> runs "+strings.Join(toStrings(step["cmd"]), " "))
+			line := label + " -> runs " + strings.Join(toStrings(step["cmd"]), " ")
+			if d := str(step["dir"]); d != "" {
+				line += " in " + d
+			}
+			out = append(out, line)
 		case "browser":
 			line := label + " -> browser flow " + str(step["browser"])
 			var sites []string
@@ -251,14 +255,23 @@ func call(step map[string]any, ctx map[string]string, dir string) (ok bool, data
 		cmd := exec.Command(argv[0], argv[1:]...)
 		// like browser flows: a recipe works the same from any folder, and from a scheduler
 		cmd.Dir = dir
+		if d := str(step["dir"]); filepath.IsAbs(d) {
+			cmd.Dir = d
+		} else if d != "" { // such as "..", for a CLI that needs the project root
+			cmd.Dir = filepath.Join(dir, d)
+		}
 		cmd.Env = childEnv()
 		cmd.Stdin = strings.NewReader(ctx["new"]) // the new key goes over stdin, never into argv
-		var out bytes.Buffer
-		cmd.Stdout = &out
+		var out, errOut bytes.Buffer
+		cmd.Stdout, cmd.Stderr = &out, &errOut
 		runErr := cmd.Run()
 		ok, raw, detail = runErr == nil, out.Bytes(), fmt.Sprintf("exit %d", cmd.ProcessState.ExitCode())
 		if cmd.ProcessState == nil {
 			detail = "command not found"
+		}
+		lines := strings.Split(strings.TrimSpace(errOut.String()), "\n")
+		if last := hint(lines[len(lines)-1]); !ok && last != "" { // a CLI's last error line usually says why
+			detail += ": " + last
 		}
 	case "url":
 		u, err := renderString(str(step["url"]), ctx, "")

@@ -34,6 +34,8 @@ import (
 // shortcut: reads document.body text and input values only, misses iframes and shadow DOM; extend if a site needs it
 const domText = `document.body.innerText + '\n' + [...document.querySelectorAll('input,textarea')].map(e => e.value).join('\n')`
 
+const dialogText = `[...document.querySelectorAll('[role=dialog],[role=alertdialog],dialog[open]')].map(e => e.innerText).join(' | ')`
+
 var totpRe = regexp.MustCompile(`\{\{totp:(\w+)\}\}`)
 
 func totp(secret string, t time.Time) (string, error) {
@@ -311,12 +313,21 @@ func runFlow(flow map[string]any, vars map[string]string) ([]byte, error) {
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
+	where := ""
+	if pattern != nil && value == "" { // an open dialog often says why no key came, such as a site asking to sign in again
+		loc, _ := chromedp.Run(ctx, chromedp.Location())
+		dialogs, _ := chromedp.Run(ctx, chromedp.Evaluate[string](dialogText))
+		where = "; the page was " + hint(pattern.ReplaceAllString(loc, "[cut]"))
+		if d := hint(pattern.ReplaceAllString(dialogs, "[cut]")); d != "" {
+			where += ", showing: " + d
+		}
+	}
 	_ = chromedp.Cancel(ctx) // closes Chrome cleanly so the profile keeps its login
 	if pattern == nil {
 		return []byte("{}"), nil
 	}
 	if value == "" {
-		return nil, errors.New("no new key matched the capture regex")
+		return nil, errors.New("no new key matched the capture regex" + where)
 	}
 	addSecret(value)
 	return json.Marshal(map[string]string{"id": id, "value": value})

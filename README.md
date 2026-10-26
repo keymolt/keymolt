@@ -193,7 +193,11 @@ Each step is one of four kinds:
   such as `npx convex`. Approval covers the command line, not the code it runs:
   a script in the recipe's folder, or a package `npx` loads from the project's
   `node_modules`, could change after approval. Commands don't get keymolt's
-  `KEYMOLT_CRED_*` variables.
+  `KEYMOLT_CRED_*` variables. A command runs in the recipe's folder. Set
+  `dir`, relative to that folder, for a tool that must run in the project:
+  `npx convex` needs `"dir": ".."` in a recipe in the project's `.keymolt/`
+  folder. If a command fails, the error ends with its last line of error
+  output, with key-like text cut.
 - **`browser`** — a saved browser flow, for providers that only make keys in a
   dashboard.
 - **`vault`** — saves the new key back into the vault under a name, so an admin
@@ -309,6 +313,11 @@ that reveals the key — it records the keys already on the page first, so only 
 new one is taken. `fill` values may use `{{cred:NAME}}` and `{{totp:NAME}}` for
 sites that need a login each time; these fill only when the browser is on one of
 that credential's hosts, so a lookalike page gets nothing.
+
+Many dashboards ask you to sign in again before they make a key. Start the flow
+with those sign-in steps, such as a click on "Sign in with Google", so it works
+long after `keymolt browser login`. If a flow ends without a key, the error
+gives the page's URL and the text of any open dialog, with key-like text cut.
 
 The selectors above are placeholders — change them to match your provider's
 dashboard.

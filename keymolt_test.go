@@ -46,7 +46,12 @@ func TestHelperProcess(t *testing.T) {
 	case "env": // saves the environment it got, to check what reaches a command
 		_ = os.WriteFile(args[1], []byte(strings.Join(os.Environ(), "\n")), 0o600)
 	case "fail": // a CLI that exits non-zero, such as after a timeout that may have left the write in place
+		b, _ := io.ReadAll(os.Stdin) // and echoes the key in its error, which keymolt must not print
+		fmt.Fprintf(os.Stderr, "starting\ncan't store %s: no package.json\n", b)
 		os.Exit(1)
+	case "pwd": // saves the folder it ran in
+		wd, _ := os.Getwd()
+		_ = os.WriteFile(args[1], []byte(wd), 0o600)
 	case "gen":
 		b := make([]byte, 16)
 		_, _ = rand.Read(b)
@@ -353,9 +358,28 @@ func TestRotate(t *testing.T) {
 		before := len(f.revoked)
 		code, out, _ := cli(t, "SECRET", "rotate", p)
 		e := readState(t, dir)["first.json"]
-		if code != 1 || !strings.Contains(str(out["error"]), "may hold the new key") || len(f.revoked) != before ||
+		if code != 1 || !strings.Contains(str(out["error"]), "exit 1: can't store [redacted]: no package.json") ||
+			!strings.Contains(str(out["error"]), "may hold the new key") || len(f.revoked) != before ||
 			e.ID != oldID || len(e.Stale) != 1 || e.Stale[0] == oldID {
 			t.Fatal("a failed store must revoke nothing and track both keys:", out, e)
+		}
+	})
+
+	t.Run("a cmd step's dir is relative to the recipe's folder, for CLIs that need the project root", func(t *testing.T) {
+		dir := t.TempDir()
+		_ = os.Mkdir(filepath.Join(dir, ".keymolt"), 0o700)
+		p, wd := filepath.Join(dir, ".keymolt", "dir.json"), filepath.Join(dir, "wd.txt")
+		store := []any{map[string]any{"label": "root", "cmd": helper("pwd", wd), "dir": ".."}}
+		writeJSON(t, p, maps(recipe, "name", "fake_dir", "store", store))
+		code, out, _ := cli(t, "SECRET", "rotate", p)
+		got, _ := os.ReadFile(wd)
+		a, _ := os.Stat(string(got))
+		b, _ := os.Stat(dir)
+		if code != 0 || a == nil || !os.SameFile(a, b) {
+			t.Fatal("the command must run in the recipe folder's parent:", out, string(got))
+		}
+		if d := strings.Join(recipeDestinations(map[string]any{"store": store}), "\n"); !strings.Contains(d, " in ..") {
+			t.Error("approve must show the folder a command runs in:", d)
 		}
 	})
 

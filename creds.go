@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"sort"
 	"strconv"
@@ -49,6 +50,18 @@ func scrub(text string) string {
 		text = strings.ReplaceAll(text, s, "[redacted]")
 	}
 	return text
+}
+
+var longToken = regexp.MustCompile(`[A-Za-z0-9_+=-]{24,}`)
+
+// hint makes outside text, such as a command's error output or a page's dialog, safe to put in an error message:
+// known secrets and anything long enough to be a key are cut, and the text is kept short.
+func hint(text string) string {
+	s := strings.Join(strings.Fields(longToken.ReplaceAllString(scrub(text), "[cut]")), " ")
+	if r := []rune(s); len(r) > 200 {
+		s = string(r[:200]) + "..."
+	}
+	return s
 }
 
 // --- credential store -----------------------------------------------------------------------

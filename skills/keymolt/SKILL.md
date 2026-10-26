@@ -75,6 +75,16 @@ README section "Writing a recipe" lists every field.
   script for a `cmd` step to run: approval covers the command line, not the
   script's contents. The new key reaches the command on stdin; `{{new}}` on a
   command line is refused. A `url` step sends `{{new}}` only over https.
+- A `cmd` step runs in the recipe's folder. For a tool that must run in the
+  project, such as `npx convex`, set `"dir": ".."` on a recipe in the
+  project's `.keymolt/` folder. Don't wrap the command in `cmd /c` or `sh -c`
+  to change folders.
+- For a dashboard with no API, write a `browser` flow. Many dashboards ask for
+  a recent sign-in before they make a key, so start the flow with the sign-in
+  clicks, such as "Sign in with Google". Some revoke dialogs make you type the
+  key's name, so add a `fill` with `{{old_id}}`. The user's
+  `keymolt browser login` session is separate from any browser you use to look
+  at the page, so a sign-in in your browser doesn't reach keymolt's.
 - Give each step exactly one of `url`, `cmd`, `browser` or `vault`.
 - If the create response has no key id, read the provider's full API for list
   and delete endpoints before you tell the user keymolt can't revoke the key.
@@ -110,7 +120,8 @@ one JSON line. On success, `ok` is `true`. On failure, the output is
 | `run ... in a real terminal`, or `keymolt doesn't track key` | Ask the user to run the quoted command in their own terminal |
 | `the destination already holds a key` | Use `find`, then the "made by hand" row above |
 | `keymolt already made a key for this recipe` | Use `rotate` instead of `create` |
-| `store #N failed ...` ending in `both live, rerun` | A destination may hold the new key, so both keys stay live. Fix the cause, then run `rotate` again. |
+| `store #N failed ...` ending in `both live, rerun` | A destination may hold the new key, so both keys stay live. The text after `exit N:` is the command's last error line. Fix the cause, then run `rotate` again, not `create`. |
+| `browser: no new key matched the capture regex` | Read the page and dialog the error quotes. A sign-in prompt means the site wants a recent login: add the sign-in steps to the start of the flow. |
 | `new key ... could not be revoked` | keymolt still tracks it, and the next `rotate` revokes it |
 | `the last two rotations' stores failed, so keys ... may be live and unused` | `rotate-all` stops for this recipe. Find out why the store failed, such as an expired login, and tell the user. After the fix, run `keymolt rotate RECIPE`. |
 | `another keymolt run is using this folder` | Wait for the other run. If none is running, tell the user the lock file's path. |
