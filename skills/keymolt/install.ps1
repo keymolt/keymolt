@@ -1,7 +1,7 @@
 # Installs the keymolt release this skill was written for into %LOCALAPPDATA%\keymolt, after checking its SHA-256.
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue' # the progress bar makes Invoke-WebRequest very slow in Windows PowerShell
-$version = 'v0.1.4' # the release workflow checks this matches the tag
+$version = 'v0.1.5' # the release workflow checks this matches the tag
 
 $arch = if ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64') { 'arm64' } else { 'amd64' }
 $file = "keymolt_windows_$arch.exe"
