@@ -392,6 +392,7 @@ func TestRotate(t *testing.T) {
 		for _, store := range []map[string]any{
 			{"label": "401", "method": "PUT", "url": base + "/store-refused", "body": map[string]any{"value": "{{new}}"}},
 			{"label": "missing", "cmd": []any{"keymolt-no-such-command"}},
+			{"label": "bad dir", "cmd": helper("store", "x"), "dir": "no-such-folder"},
 		} {
 			writeJSON(t, p, maps(recipe, "name", "fake_refused", "store", []any{store}))
 			for range 2 { // like a weekly job that keeps failing
@@ -400,6 +401,9 @@ func TestRotate(t *testing.T) {
 				e := readState(t, dir)["refused.json"]
 				if code != 1 || !strings.Contains(str(out["error"]), "new key revoked") || len(f.revoked) != before+1 || e.ID != oldID || len(e.Stale) != 0 {
 					t.Fatal("a refused store must revoke the new key and leave state as it was:", store["label"], out, e)
+				}
+				if store["cmd"] != nil && !strings.Contains(str(out["error"]), "command didn't start: ") {
+					t.Fatal("a command that never ran must say so, with the reason:", out)
 				}
 			}
 		}

@@ -34,7 +34,9 @@ import (
 // shortcut: reads document.body text and input values only, misses iframes and shadow DOM; extend if a site needs it
 const domText = `document.body.innerText + '\n' + [...document.querySelectorAll('input,textarea')].map(e => e.value).join('\n')`
 
-const dialogText = `[...document.querySelectorAll('[role=dialog],[role=alertdialog],dialog[open]')].map(e => e.innerText).join(' | ')`
+// only visible dialogs: innerText of a hidden one, such as a closed modal kept in the page, still returns its text
+const dialogText = `[...document.querySelectorAll('[role=dialog],[role=alertdialog],dialog[open]')]
+	.filter(e => e.checkVisibility()).map(e => e.innerText.trim()).filter(Boolean).join(' | ')`
 
 var totpRe = regexp.MustCompile(`\{\{totp:(\w+)\}\}`)
 
@@ -317,9 +319,11 @@ func runFlow(flow map[string]any, vars map[string]string) ([]byte, error) {
 	if pattern != nil && value == "" { // an open dialog often says why no key came, such as a site asking to sign in again
 		loc, _ := chromedp.Run(ctx, chromedp.Location())
 		dialogs, _ := chromedp.Run(ctx, chromedp.Evaluate[string](dialogText))
-		where = "; the page was " + hint(pattern.ReplaceAllString(loc, "[cut]"))
+		if l := hint(pattern.ReplaceAllString(loc, "[cut]")); l != "" { // empty when the browser is gone
+			where = "; the page was " + l
+		}
 		if d := hint(pattern.ReplaceAllString(dialogs, "[cut]")); d != "" {
-			where += ", showing: " + d
+			where += "; it showed: " + d
 		}
 	}
 	_ = chromedp.Cancel(ctx) // closes Chrome cleanly so the profile keeps its login

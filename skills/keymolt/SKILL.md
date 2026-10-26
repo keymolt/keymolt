@@ -121,7 +121,7 @@ one JSON line. On success, `ok` is `true`. On failure, the output is
 | `the destination already holds a key` | Use `find`, then the "made by hand" row above |
 | `keymolt already made a key for this recipe` | Use `rotate` instead of `create` |
 | `store #N failed ...` ending in `both live, rerun` | A destination may hold the new key, so both keys stay live. The text after `exit N:` is the command's last error line. Fix the cause, then run `rotate` again, not `create`. |
-| `browser: no new key matched the capture regex` | Read the page and dialog the error quotes. A sign-in prompt means the site wants a recent login: add the sign-in steps to the start of the flow. |
+| `create failed (browser: no new key matched the capture regex ...)` | Read the page and dialog the error quotes. A sign-in prompt means the site wants a recent login: add the sign-in steps to the start of the flow. |
 | `new key ... could not be revoked` | keymolt still tracks it, and the next `rotate` revokes it |
 | `the last two rotations' stores failed, so keys ... may be live and unused` | `rotate-all` stops for this recipe. Find out why the store failed, such as an expired login, and tell the user. After the fix, run `keymolt rotate RECIPE`. |
 | `another keymolt run is using this folder` | Wait for the other run. If none is running, tell the user the lock file's path. |

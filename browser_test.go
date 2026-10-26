@@ -187,13 +187,14 @@ func TestBrowserKeyOnlyOnHTTPS(t *testing.T) {
 // a flow that ends without a key says where it stopped, such as a site asking to sign in again, but not a key on the page
 func TestCaptureFailureShowsDialog(t *testing.T) {
 	flow := map[string]any{"profile": t.TempDir(), "timeout": 1, "steps": []any{
-		map[string]any{"goto": "data:text/html,<div role=dialog>Please sign in again. Old key: sk-old-SECRET-0123456789abcdefghij</div>"},
+		map[string]any{"goto": "data:text/html,<div role=dialog hidden>Delete your account?</div><div role=dialog>Please sign in again. Old key: sk-old-SECRET-0123456789abcdefghij</div>"},
 		map[string]any{"capture": `sk-new-[a-z0-9]{20}`}}}
 	_, err := runFlow(flow, map[string]string{})
 	if errors.Is(err, errNoBrowser) {
 		t.Skip("no Chromium-based browser here")
 	}
-	if err == nil || !strings.Contains(err.Error(), "showing: Please sign in again. Old key: [cut]") || strings.Contains(err.Error(), "SECRET") {
+	if err == nil || !strings.Contains(err.Error(), "it showed: Please sign in again. Old key: [cut]") ||
+		strings.Contains(err.Error(), "SECRET") || strings.Contains(err.Error(), "showed: Delete") { // a closed dialog says nothing about this page
 		t.Fatal("a failed capture must quote the open dialog, with key-like text cut:", err)
 	}
 }

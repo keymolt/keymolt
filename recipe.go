@@ -133,7 +133,7 @@ func eachStep(recipe map[string]any, add func(label string, step map[string]any)
 // refused reports a store that can't have written anything: the caller wasn't allowed, the target doesn't exist, or
 // the tool never ran. Other errors, such as 400 or 409, can come after a write, so they count as "may have landed".
 func refused(detail string) bool {
-	return slices.Contains([]string{"http 401", "http 403", "http 404", "command not found"}, detail)
+	return slices.Contains([]string{"http 401", "http 403", "http 404"}, detail) || strings.HasPrefix(detail, "command didn't start")
 }
 
 // flowPath is where a browser step's flow file is: relative paths start at the recipe's folder.
@@ -266,8 +266,8 @@ func call(step map[string]any, ctx map[string]string, dir string) (ok bool, data
 		cmd.Stdout, cmd.Stderr = &out, &errOut
 		runErr := cmd.Run()
 		ok, raw, detail = runErr == nil, out.Bytes(), fmt.Sprintf("exit %d", cmd.ProcessState.ExitCode())
-		if cmd.ProcessState == nil {
-			detail = "command not found"
+		if cmd.ProcessState == nil { // a missing program, or a dir that doesn't exist
+			detail = "command didn't start: " + hint(runErr.Error())
 		}
 		lines := strings.Split(strings.TrimSpace(errOut.String()), "\n")
 		if last := hint(lines[len(lines)-1]); !ok && last != "" { // a CLI's last error line usually says why
