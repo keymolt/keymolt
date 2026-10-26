@@ -122,16 +122,18 @@ func TestBrowserPath(t *testing.T) {
 		}
 	}
 	edge := "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge"
+	winEdge := `C:\Program Files\Microsoft\Edge\Application\msedge.exe`
 	cases := []struct {
 		goos, want string
 		look       func(string) (string, error)
 	}{
-		{"darwin", "", only("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome", edge)}, // Chrome wins
+		{"darwin", "/found/Google Chrome", only("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome", edge)}, // Chrome wins
 		{"darwin", "/found/Microsoft Edge", only(edge)},
 		{"linux", "/found/brave-browser", only("brave-browser")},
-		{"linux", "", only("chromium", "brave-browser")},
-		{"linux", "", only()}, // nothing installed: chromedp reports the error
-		{"windows", "", only()},
+		{"linux", "/found/chromium", only("chromium", "brave-browser")},
+		{"linux", "", only()}, // nothing installed
+		{"windows", "/found/chrome", only("chrome", winEdge)},
+		{"windows", "/found/" + filepath.Base(winEdge), only(winEdge)}, // every Windows PC has Edge
 	}
 	for _, c := range cases {
 		if got := browserPath(c.goos, c.look); got != c.want {
@@ -141,6 +143,20 @@ func TestBrowserPath(t *testing.T) {
 	t.Setenv("KEYMOLT_BROWSER", "/opt/vivaldi")
 	if got := browserPath("linux", only("chromium")); got != "/opt/vivaldi" {
 		t.Error("KEYMOLT_BROWSER must win:", got)
+	}
+}
+
+// Google's sign-in refuses a browser in automation mode or with a debugging port, so login starts a plain one.
+// It must use the profile and cookie-encryption flags flows run with, or flows lose the session.
+func TestLoginCmd(t *testing.T) {
+	args := strings.Join(loginCmd("chrome", "acme", "https://dash.example.com/login").Args, " ")
+	for _, want := range []string{"--user-data-dir=" + profileDir("acme"), "--password-store=basic", "--use-mock-keychain", "https://dash.example.com/login"} {
+		if !strings.Contains(args, want) {
+			t.Error("login must pass", want, "got:", args)
+		}
+	}
+	if strings.Contains(args, "automation") || strings.Contains(args, "remote-debugging") {
+		t.Error("login must not start the browser in automation mode:", args)
 	}
 }
 

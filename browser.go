@@ -21,7 +21,6 @@ import (
 
 	"github.com/chromedp/cdproto/browser"
 	"github.com/chromedp/cdproto/network"
-	"github.com/chromedp/cdproto/target"
 	"github.com/chromedp/chromedp"
 )
 
@@ -66,29 +65,29 @@ func profileDir(profile string) string {
 var errNoBrowser = errors.New("browser flows need a Chromium-based browser (Chrome, Edge, Brave or Chromium): " +
 	"install one, or set KEYMOLT_BROWSER to its path")
 
-// browserPath picks the browser for flows: KEYMOLT_BROWSER, else Chrome or Chromium through chromedp's own
-// search, else a Chromium-based browser that chromedp doesn't look for. "" lets chromedp choose.
+// browserPath picks the browser: KEYMOLT_BROWSER, else the first match in chromedp's own search order, else a
+// Chromium-based browser that chromedp doesn't look for. "" means none was found.
 func browserPath(goos string, lookPath func(string) (string, error)) string {
 	if p := os.Getenv("KEYMOLT_BROWSER"); p != "" {
 		return p
 	}
-	var chromedpFinds, extra []string // chromedpFinds mirrors chromedp's list for this OS
+	var paths []string
 	switch goos {
 	case "darwin":
-		chromedpFinds = []string{"/Applications/Chromium.app/Contents/MacOS/Chromium", "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"}
-		extra = []string{"/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge", "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser"}
-	case "linux":
-		chromedpFinds = []string{"headless_shell", "headless-shell", "chromium", "chromium-browser", "google-chrome", "google-chrome-stable", "chrome"}
-		extra = []string{"microsoft-edge", "microsoft-edge-stable", "brave-browser"}
+		paths = []string{"/Applications/Chromium.app/Contents/MacOS/Chromium", "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+			"/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge", "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser"}
+	case "windows":
+		local := filepath.Join(os.Getenv("USERPROFILE"), "AppData", "Local")
+		paths = []string{"chrome", "chrome.exe", `C:\Program Files (x86)\Google\Chrome\Application\chrome.exe`,
+			`C:\Program Files\Google\Chrome\Application\chrome.exe`, filepath.Join(local, `Google\Chrome\Application\chrome.exe`),
+			filepath.Join(local, `Chromium\Application\chrome.exe`), "msedge", "msedge.exe",
+			`C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe`, `C:\Program Files\Microsoft\Edge\Application\msedge.exe`}
 	default:
-		return "" // Windows: chromedp already falls back to Edge, which every Windows PC has
+		paths = []string{"headless_shell", "headless-shell", "chromium", "chromium-browser", "google-chrome", "google-chrome-stable",
+			"google-chrome-beta", "google-chrome-unstable", "/usr/bin/google-chrome", "/usr/local/bin/chrome", "/snap/bin/chromium", "chrome",
+			"microsoft-edge", "microsoft-edge-stable", "brave-browser"}
 	}
-	for _, p := range chromedpFinds {
-		if _, err := lookPath(p); err == nil {
-			return ""
-		}
-	}
-	for _, p := range extra {
+	for _, p := range paths {
 		if found, err := lookPath(p); err == nil {
 			return found
 		}
@@ -326,22 +325,26 @@ func runFlow(flow map[string]any, vars map[string]string) ([]byte, error) {
 	return json.Marshal(map[string]string{"id": id, "value": value})
 }
 
-// browserLogin opens a visible browser so the user can sign in by hand once. It returns when the tab is closed.
+// browserLogin opens a visible browser so the user can sign in by hand once. It returns when the browser closes.
 func browserLogin(profile, url string) error {
-	ctx, cancel := newBrowser(profile, true)
-	defer cancel()
-	if err := chromedp.Do(ctx); err != nil {
+	p := browserPath(runtime.GOOS, exec.LookPath)
+	if p == "" {
 		return errNoBrowser
 	}
-	destroyed := chromedp.BrowserEvents(ctx, target.TargetDestroyed)
-	if err := chromedp.Do(ctx, chromedp.Navigate(url)); err != nil {
-		return errors.New("could not open the page")
+	cmd := loginCmd(p, profile, url)
+	if err := cmd.Start(); err != nil {
+		return errNoBrowser
 	}
-	tab := chromedp.FromContext(ctx).Target.TargetID
-	for e, err := range destroyed {
-		if err != nil || e.TargetID == tab {
-			break
-		}
-	}
+	_ = cmd.Wait() // the exit code of a browser the user closed says nothing about the login
 	return nil
+}
+
+// loginCmd starts the browser as a plain process, not through chromedp: Google and other sign-in pages refuse a
+// browser in automation mode or with a debugging port. Its cookie-encryption flags match the ones flows run with,
+// or the flows couldn't read the saved session.
+func loginCmd(browser, profile, url string) *exec.Cmd {
+	cmd := exec.Command(browser, "--user-data-dir="+profileDir(profile), "--no-first-run", "--no-default-browser-check",
+		"--password-store=basic", "--use-mock-keychain", url)
+	cmd.Env = childEnv()
+	return cmd
 }

@@ -268,7 +268,8 @@ keymolt browser login acme https://dashboard.acme.com/login
 ```
 
 This opens a visible browser under the profile `acme`. Log in, then close the
-tab. The session is saved.
+browser. The session is saved. keymolt starts this browser as a normal one, not
+under automation, so "Sign in with Google" works there.
 
 The recipe ([`browser-dashboard.example.json`](browser-dashboard.example.json))
 uses a browser flow for `create` and `revoke`, and still stores the key the
