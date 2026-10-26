@@ -95,14 +95,11 @@ func browserPath(goos string, lookPath func(string) (string, error)) string {
 	return ""
 }
 
-func newBrowser(profile string, visible bool) (context.Context, context.CancelFunc) {
+func newBrowser(profile string) (context.Context, context.CancelFunc) {
 	opts := append(chromedp.DefaultExecAllocatorOptions[:], chromedp.UserDataDir(profileDir(profile)),
 		chromedp.NoInheritEnv, chromedp.Env(childEnv()...))
 	if p := browserPath(runtime.GOOS, exec.LookPath); p != "" {
 		opts = append(opts, chromedp.ExecPath(p))
-	}
-	if visible {
-		opts = append(opts, chromedp.VisibleWindow)
 	}
 	actx, cancelAlloc := chromedp.NewExecAllocator(context.Background(), opts...)
 	ctx, cancelCtx := chromedp.NewContext(actx)
@@ -158,7 +155,7 @@ func runFlow(flow map[string]any, vars map[string]string) ([]byte, error) {
 	}
 	defer os.RemoveAll(downloads)
 
-	ctx, cancel := newBrowser(profile, false)
+	ctx, cancel := newBrowser(profile)
 	defer cancel()
 	if err := chromedp.Do(ctx); err != nil {
 		return nil, errNoBrowser
@@ -335,7 +332,12 @@ func browserLogin(profile, url string) error {
 	if err := cmd.Start(); err != nil {
 		return errNoBrowser
 	}
+	start := time.Now()
 	_ = cmd.Wait() // the exit code of a browser the user closed says nothing about the login
+	// a browser already open on this profile takes the URL and this one exits at once; so does one that crashes
+	if time.Since(start) < 3*time.Second {
+		return errors.New("the browser closed right away; if a keymolt browser for this profile is open, close it and run login again")
+	}
 	return nil
 }
 

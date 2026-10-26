@@ -158,6 +158,12 @@ func TestLoginCmd(t *testing.T) {
 	if strings.Contains(args, "automation") || strings.Contains(args, "remote-debugging") {
 		t.Error("login must not start the browser in automation mode:", args)
 	}
+
+	// a browser that exits at once, like one handing the URL to a window already open on the profile
+	t.Setenv("KEYMOLT_BROWSER", os.Args[0]) // the test binary rejects the browser flags and exits
+	if err := browserLogin(t.TempDir(), "https://dash.example.com/login"); err == nil || !strings.Contains(err.Error(), "right away") {
+		t.Error("login must report a browser that closed at once:", err)
+	}
 }
 
 func TestBrowserKeyOnlyOnHTTPS(t *testing.T) {
