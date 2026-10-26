@@ -35,7 +35,8 @@ The human keeps the power to see secrets and to decide where they may go.
 - **A recipe can only run after a human approves it.** `approve` prints every
   destination the recipe sends keys to and asks you to confirm. It records a
   hash of the file and of any browser flow files it uses, and each run uses the
-  exact bytes it checked. Edit any of them and approval is gone. `approve` only
+  exact bytes it checked. Edit any of them and approval is gone. A change of
+  line endings, such as git makes on Windows, doesn't count as an edit. `approve` only
   runs in a real terminal, and there is no switch that approves every recipe.
 - **A rotation never leaves you without a working key.** keymolt makes the new
   key, tests it, stores it everywhere the old one lived, saves its state, and
@@ -401,10 +402,10 @@ variable, such as `GH_TOKEN`.
 CI has no vault for approvals either. List the SHA-256 hash of each recipe you
 trust in `KEYMOLT_APPROVED`, comma-separated. `keymolt approve` prints each
 recipe's hash before it asks. For a recipe with no browser flows, `sha256sum recipe.json` gives the
-same hash. Store the list as a CI secret, so
+same hash for a file with LF line endings. Store the list as a CI secret, so
 a pull request that edits a recipe can't run it until you update the list. The
-hash covers the exact bytes, so keep git from changing line endings in recipe
-files (add `*.json -text` to `.gitattributes`).
+hash reads CRLF line endings as LF, so a recipe approved on Windows has the
+same hash in CI on Linux.
 
 ## License
 

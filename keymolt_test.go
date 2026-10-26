@@ -747,6 +747,22 @@ func TestApproval(t *testing.T) {
 		t.Fatal("a hash in KEYMOLT_APPROVED must approve its recipe")
 	}
 
+	// git on Windows checks recipes out with CRLF line endings: the same recipe, so the same approval
+	lf := []byte("{\n  \"name\": \"x\",\n  \"create\": {\"url\": \"https://api.example.com\"},\n  \"store\": [{\"url\": \"https://api.example.com\"}]\n}\n")
+	crlf := bytes.ReplaceAll(lf, []byte("\n"), []byte("\r\n"))
+	lfSum := sha256.Sum256(lf)
+	t.Setenv("KEYMOLT_APPROVED", hex.EncodeToString(lfSum[:])) // what `sha256sum` gives for the file as git stores it
+	os.WriteFile(path, crlf, 0o600)
+	if !isApproved(path) {
+		t.Fatal("a recipe approved with LF line endings must stay approved with CRLF")
+	}
+	os.WriteFile(path, bytes.Replace(crlf, []byte("api."), []byte("evil."), 1), 0o600)
+	if isApproved(path) {
+		t.Fatal("an edited CRLF recipe must not be approved")
+	}
+	os.WriteFile(path, b, 0o600)
+	t.Setenv("KEYMOLT_APPROVED", h)
+
 	// a flow decides which pages see the new key, so changing it needs a new approval
 	dir := filepath.Dir(path)
 	fpath, flowed := filepath.Join(dir, "store.flow.json"), filepath.Join(dir, "flowed.json")

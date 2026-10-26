@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -113,6 +114,12 @@ func credSetPrompt(name string, hosts []string, w io.Writer) error {
 // A recipe says where keys go. A prompt-injected agent could add an exfiltration destination.
 // So a human approves a recipe once, by its exact bytes. Editing the file revokes approval.
 
+// lfSum hashes a file with CRLF read as LF, so git's line-ending conversion on Windows doesn't revoke approval.
+// JSON can't hold a raw CR inside a string, so two files that differ only in line endings parse to the same recipe.
+func lfSum(b []byte) [32]byte {
+	return sha256.Sum256(bytes.ReplaceAll(b, []byte("\r\n"), []byte("\n")))
+}
+
 // readRecipe reads a recipe and each browser flow it uses, once, and checks its steps. It returns the recipe, with
 // each flow attached to its step, and the hash approval covers: the recipe file's SHA-256, or with flows, the
 // SHA-256 of the recipe's and each flow's SHA-256. Runs use what it returns, so they run the bytes that were approved.
@@ -125,7 +132,7 @@ func readRecipe(path string) (map[string]any, string, error) {
 	if !ok {
 		return nil, "", fmt.Errorf("%s is not a JSON object", path)
 	}
-	sum := sha256.Sum256(b)
+	sum := lfSum(b)
 	h, flows := sha256.New(), 0
 	h.Write(sum[:])
 	eachStep(recipe, func(_ string, step map[string]any) {
@@ -136,7 +143,7 @@ func readRecipe(path string) (map[string]any, string, error) {
 		if fb, err = os.ReadFile(flowPath(step, filepath.Dir(path))); err != nil {
 			return
 		}
-		fsum := sha256.Sum256(fb)
+		fsum := lfSum(fb)
 		h.Write(fsum[:])
 		flows++
 		flow, ok := decode(fb).(map[string]any)
@@ -152,7 +159,7 @@ func readRecipe(path string) (map[string]any, string, error) {
 	if err != nil {
 		return nil, "", err
 	}
-	if flows == 0 { // the plain file hash, so `sha256sum recipe.json` gives it too
+	if flows == 0 { // the plain file hash, so `sha256sum recipe.json` gives it too for a file with LF line endings
 		return recipe, hex.EncodeToString(sum[:]), nil
 	}
 	return recipe, hex.EncodeToString(h.Sum(nil)), nil
