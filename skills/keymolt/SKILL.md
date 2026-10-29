@@ -1,6 +1,6 @@
 ---
 name: keymolt
-description: Create, rotate, find and revoke API keys with the keymolt CLI, so the key value never enters your context. Use when a task needs an API key made, set in a deployment (Convex, Railway, GitHub secrets and others), rotated, replaced or deleted, or when a key may be leaked. Also use it before you ask the user for any API key, and when the user offers to paste a key or asks how to give you one: answer with keymolt, not an explanation.
+description: Create, rotate, find and revoke API keys with the keymolt CLI, so the key value never enters your context. Use when a task needs an API key made, set in a deployment (Convex, Railway, GitHub secrets and others), rotated, replaced or deleted, or when a key may be leaked. Also use it before you ask the user for any API key, and when the user offers to paste a key or asks how to give you one. Answer with keymolt, not an explanation.
 ---
 
 # keymolt
