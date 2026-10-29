@@ -110,8 +110,17 @@ func credSetPrompt(name string, hosts []string, w io.Writer) error {
 		}
 		clean[i] = n
 	}
+	// An agent often writes this command for the person, so name the hosts before they paste a key.
+	if old, err := credLoad(name); err == nil && !slices.Equal(slices.Sorted(slices.Values(old.Hosts)), slices.Sorted(slices.Values(clean))) {
+		fmt.Fprintf(w, "%s is already saved, locked to %s. Saving replaces it, locked to %s.\nReplace it? [y/N] ",
+			name, httpsList(old.Hosts), httpsList(clean))
+		if !yes() {
+			return errors.New("not replaced")
+		}
+	}
+	fmt.Fprintf(w, "keymolt will send %s only to %s. Paste only a key for that service.\n", name, httpsList(clean))
 	fmt.Fprintf(os.Stderr, "Value for %s (hidden): ", name)
-	b, err := term.ReadPassword(int(os.Stdin.Fd()))
+	b, err := readHidden()
 	fmt.Fprintln(os.Stderr)
 	if err != nil {
 		return fmt.Errorf("could not read a hidden value: run this in a terminal")
@@ -231,7 +240,15 @@ func loadApproved(path string) (map[string]any, error) {
 var (
 	atTerminal           = func() bool { return term.IsTerminal(int(os.Stdin.Fd())) }
 	stdin      io.Reader = os.Stdin
+	readHidden           = func() ([]byte, error) { return term.ReadPassword(int(os.Stdin.Fd())) }
 )
+
+// yes reads one answer line and reports whether it was y or yes.
+func yes() bool {
+	answer, _ := bufio.NewReader(stdin).ReadString('\n')
+	a := strings.ToLower(strings.TrimSpace(answer))
+	return a == "y" || a == "yes"
+}
 
 // approveCommand shows where each new or changed recipe sends keys, then approves them all if the person says yes.
 // target is a recipe, or a folder: then every recipe rotate-all would run.
@@ -275,8 +292,7 @@ func approveCommand(target string, w io.Writer) error {
 		return nil
 	}
 	fmt.Fprintf(w, "Approve %d recipe(s)? [y/N] ", len(hashes))
-	answer, _ := bufio.NewReader(stdin).ReadString('\n')
-	if a := strings.ToLower(strings.TrimSpace(answer)); a != "y" && a != "yes" {
+	if !yes() {
 		return errors.New("not approved")
 	}
 	for _, h := range hashes {

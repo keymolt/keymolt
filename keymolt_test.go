@@ -858,6 +858,36 @@ func TestApproval(t *testing.T) {
 	}
 }
 
+func TestCredSetHosts(t *testing.T) {
+	prev := readHidden
+	readHidden = func() ([]byte, error) { return []byte("sk-NEW\n"), nil }
+	t.Cleanup(func() { readHidden = prev })
+	answer := func(s string) { stdin = strings.NewReader(s); t.Cleanup(func() { stdin = os.Stdin }) }
+	var out bytes.Buffer
+	if err := credSetPrompt("hosted", []string{"api.example.com", "b.example.com"}, &out); err != nil || strings.Contains(out.String(), "Replace") ||
+		!strings.Contains(out.String(), "only to https://api.example.com or https://b.example.com.") {
+		t.Fatal("a new credential must name its hosts, and save without a question:", err, out.String())
+	}
+	if err := credSetPrompt("hosted", []string{"b.example.com", "https://api.example.com"}, &out); err != nil || strings.Contains(out.String(), "Replace") {
+		t.Fatal("the same hosts, in any order, must save without a question:", err, out.String())
+	}
+	answer("n\n")
+	if err := credSetPrompt("hosted", []string{"evil.example.com"}, &out); err == nil || !strings.Contains(out.String(),
+		"locked to https://b.example.com or https://api.example.com. Saving replaces it, locked to https://evil.example.com") {
+		t.Fatal("new hosts must show the old and new hosts and need a yes:", err, out.String())
+	}
+	if c, _ := credLoad("hosted"); !slices.Equal(c.Hosts, []string{"b.example.com", "api.example.com"}) {
+		t.Fatal("a no must keep the old hosts:", c.Hosts)
+	}
+	answer("y\n")
+	if err := credSetPrompt("hosted", []string{"evil.example.com"}, &out); err != nil {
+		t.Fatal(err)
+	}
+	if c, _ := credLoad("hosted"); c.Value != "sk-NEW" || !slices.Equal(c.Hosts, []string{"evil.example.com"}) {
+		t.Fatal("a yes must save the new hosts:", c.Hosts)
+	}
+}
+
 func TestApproveFolder(t *testing.T) {
 	setTerminal(t, true)
 	root := t.TempDir()

@@ -1,6 +1,6 @@
 ---
 name: keymolt
-description: Create, rotate, find and revoke API keys with the keymolt CLI, so the key value never enters your context. Use when a task needs an API key made, set in a deployment (Convex, Railway, GitHub secrets and others), rotated, replaced or deleted, or when a key may be leaked.
+description: Create, rotate, find and revoke API keys with the keymolt CLI, so the key value never enters your context. Use when a task needs an API key made, set in a deployment (Convex, Railway, GitHub secrets and others), rotated, replaced or deleted, or when a key may be leaked. Also use it before you ask the user for any API key, and when the user offers to paste a key or asks how to give you one: answer with keymolt, not an explanation.
 ---
 
 # keymolt
@@ -15,6 +15,10 @@ never holds the key.
    into the chat. Don't run commands that print one, such as
    `npx convex env get`, `railway variables`, `printenv` or `cat .env`. If a
    task seems to need the value, use keymolt instead.
+   If the user offers to paste a key, say no and use keymolt: it makes a new
+   key, or the user saves an admin key with `keymolt cred-set`. If a key is
+   already in the chat, treat it as leaked: tell the user, and replace it with
+   `keymolt rotate` or by hand.
 2. Some steps belong to the user: `keymolt cred-set`, `keymolt approve`,
    `keymolt link`, and `keymolt revoke` for a key keymolt doesn't track. They
    need a real terminal, so they fail from your shell. Give the user the exact
