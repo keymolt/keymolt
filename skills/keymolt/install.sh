@@ -1,7 +1,7 @@
 #!/bin/sh
 # Installs the keymolt release this skill was written for into ~/.local/bin, after checking its SHA-256.
 set -eu
-version=v0.1.7 # the release workflow checks this matches the tag
+version=v0.1.8 # the release workflow checks this matches the tag
 
 os=$(uname -s | tr A-Z a-z)
 case $os in linux | darwin) ;; *) echo "unsupported OS: $os (on Windows, use install.ps1)" >&2; exit 1 ;; esac
